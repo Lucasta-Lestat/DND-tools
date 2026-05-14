@@ -312,6 +312,99 @@ MAGIC_ASSETS = [
 
 ALL_ASSETS = FORCE_ASSETS + CUNNING_ASSETS + WEALTH_ASSETS + MAGIC_ASSETS
 
+# ----- Veins-of-the-Earth setting-specific assets -----
+# Designed to flavour faction rosters with the textures of Patrick Stuart's
+# Veins: bioluminescence, hunger, dream, contract, fungal infection, geomancy,
+# drowned tunnels, and the dignity (or rage) of small light.
+
+VEINS_FORCE_ASSETS = [
+    ("Tunnel Crawlers", "Force", 3, 6, "F vs F", "1d6", "1d4", "Force 2", "Mobile",
+     "Light infantry trained for narrow ways; Move cost ignored within the Veins."),
+    ("Lantern Wardens", "Force", 5, 8, "F vs M", "1d8", "1d4", "Force 3", "Special",
+     "Gnonmen heavy-light bearers. While present, rival Magic and Stealthed attacks in this "
+     "location are at -1 to the roll."),
+    ("Stone-Eaters", "Force", 8, 14, "F vs F", "1d10", "1d8", "Force 4, Magic 2", "Special",
+     "Substratal close-order elementals. Halve all damage from non-Magic attacks."),
+    ("Crystal Lancers", "Force", 8, 8, "F vs M", "1d10", "1d6", "Force 3, Magic 1", "Special",
+     "dErO troops with crackling polearms. Double damage vs Magic assets."),
+    ("Spore-Maddened Slaves", "Force", 3, 8, "F vs F", "1d6", "—", "Force 2", "Fanatic",
+     "Funginid spore-controlled bodies. Cannot retreat and cannot be Healed."),
+    ("Dream-Knights of the Black Glass Court", "Force", 14, 16, "F vs C", "2d6", "1d10",
+     "Force 5, Magic 2", "—",
+     "Aelf-Adal household champions. +1 to attack rolls vs locations under any Cult Network."),
+]
+
+VEINS_CUNNING_ASSETS = [
+    ("Spore-Wreaths", "Cunning", 4, 6, "C vs C", "1d6", "—", "Cunning 2", "Stealthed, Subtle",
+     "Funginid spy-mats. If destroyed in a location with another Funginid asset, re-roots at "
+     "1 HP next turn at no cost."),
+    ("Lightless Cartographers", "Cunning", 3, 4, "C vs C", "1d4", "—", "Cunning 1",
+     "Stealthed, Mobile",
+     "Veins mapmakers. Once per turn, reveal one unexplored adjacent location to the owning "
+     "faction."),
+    ("Debt-Collectors", "Cunning", 5, 6, "C vs W", "1d8", "—", "Cunning 2, Magic 1", "Subtle",
+     "Knotsmen with infernally binding scrolls. On a successful attack, owner gains 1 Treasure "
+     "instead of (or in addition to) inflicting the last 2 damage."),
+    ("Dream-Walkers", "Cunning", 6, 6, "C vs M", "1d8", "—", "Cunning 3, Magic 2",
+     "Stealthed, Subtle",
+     "Aelf-Adal subconscious infiltrators. May attack any asset in a location that contains a "
+     "Cult Network, regardless of distance."),
+    ("Olm Listeners", "Cunning", 2, 4, "C vs C", "1d6", "—", "Cunning 1", "Stealthed",
+     "Silent amphibians pressed to wet stone. Free action: on 4+ on 1d6, learn one rival "
+     "action declared this turn."),
+    ("Janeen Aesthete-Spies", "Cunning", 8, 8, "C vs C", "1d10", "—", "Cunning 4, Magic 2",
+     "Subtle",
+     "Deep Janeen connoisseur-intelligencers. Each turn, reveal one tag of a rival faction "
+     "(may also be used as polite blackmail)."),
+]
+
+VEINS_WEALTH_ASSETS = [
+    ("Mushroom Fields", "Wealth", 2, 6, "W vs W", "1d4", "1d4", "Wealth 2", "Special",
+     "Gnonmen subsistence cultivation. On 4+ on 1d6 at turn start, gain 1 Treasure. Any fire "
+     "or scour attack deals +3 damage to this asset."),
+    ("Pact-Vaults", "Wealth", 10, 10, "W vs W", "1d8", "1d4", "Wealth 4, Magic 1", "Special",
+     "Knotsmen infernal banking. Stockpiles up to 6 Treasure. If destroyed, the stored "
+     "Treasure is lost AND the attacker's nearest Wealth asset takes 2d6 damage from "
+     "vengeful contract-fiends."),
+    ("Crystal Mines", "Wealth", 6, 10, "W vs F", "1d6", "1d6", "Wealth 3, Magic 1", "Special",
+     "dErO industrial workings. +1 Treasure per turn; reduces the Cost of Magic assets built "
+     "at this location by 1 (min 1)."),
+    ("Maze-Toll", "Wealth", 8, 10, "W vs M", "1d6", "—", "Wealth 4, Magic 3", "Special",
+     "Deep Janeen labyrinth-entry. +2 Treasure per turn while undisturbed; collapses (asset "
+     "destroyed) if any rival Magic asset enters the location."),
+    ("Hidden Larder", "Wealth", 2, 4, "—", "—", "—", "Wealth 1", "Stealthed, Special",
+     "Olm food caches squirreled into wet stone. Spend 1 Treasure as a free action to bring "
+     "one of your destroyed non-Magic 1-cost assets back at 1 HP in this location."),
+    ("Substratal Tribute Stones", "Wealth", 6, 10, "—", "—", "—", "Wealth 3, Magic 2",
+     "Special",
+     "Geomantic tax-pillars. Generates +1 Treasure per turn for every Magic asset that "
+     "shares this location, including rivals'."),
+]
+
+VEINS_MAGIC_ASSETS = [
+    ("Spore-Cathedral Choir", "Magic", 8, 10, "M vs M", "1d8", "1d6", "Magic 3", "Special",
+     "Funginid ritualists. At start of each turn, heal 1 HP to every Funginid Cunning asset "
+     "in this location."),
+    ("Dream Anchor", "Magic", 10, 14, "M vs M", "1d6", "1d8", "Magic 4", "Special",
+     "Aelf-Adal sleeping-relic. Rival Magic actions in this location cost +1 Treasure."),
+    ("Demonic Notary", "Magic", 12, 10, "M vs M", "1d10", "1d6", "Magic 3", "Subtle, Special",
+     "Knotsmen pact-fiend. Once per turn, force any rival to pay 1 Treasure or cancel an "
+     "action declared against your faction."),
+    ("Hearth-Lantern Shrine", "Magic", 5, 8, "M vs M", "1d6", "1d4", "Magic 2", "Special",
+     "Gnonmen warding-light. Stealthed assets in this location are revealed automatically; "
+     "the light does not permit hiding."),
+    ("Stone-Voice Oracle", "Magic", 10, 14, "M vs M", "1d8", "1d8", "Magic 4", "Special",
+     "Substratal seer-elemental. At start of each turn, the owner may force one rival to "
+     "declare their action before declaring their own."),
+    ("Olm Anatomist", "Magic", 8, 8, "M vs F", "2d4", "—", "Magic 3", "Stealthed, Special",
+     "Knower of unmaking-shapes. Deals double damage to any asset with HP 6 or less."),
+]
+
+VEINS_ASSETS = (VEINS_FORCE_ASSETS + VEINS_CUNNING_ASSETS +
+                VEINS_WEALTH_ASSETS + VEINS_MAGIC_ASSETS)
+
+ALL_ASSETS = ALL_ASSETS + VEINS_ASSETS
+
 # ----- faction tags -----
 TAGS_HEADERS = ["Tag", "Effect"]
 TAGS = [
@@ -460,9 +553,9 @@ VEINS_FACTIONS = [
         "assets": [
             ("Bonded Service", "Wealth", "Mid-Veins markets"),
             ("Usurers",        "Wealth", "Compounding Vaults"),
-            ("Counting House", "Wealth", "Compounding Vaults"),
-            ("Spies",          "Cunning","Surface debtor towns"),
-            ("Demonologists",  "Magic",  "Hall of Contracts"),
+            ("Pact-Vaults",    "Wealth", "Compounding Vaults"),
+            ("Debt-Collectors","Cunning","Surface debtor towns"),
+            ("Demonic Notary", "Magic",  "Hall of Contracts"),
             ("Mercenaries",    "Force",  "Compounding Vaults"),
             ("Saboteurs",      "Cunning","Rival faction debt-houses"),
         ],
@@ -482,13 +575,13 @@ VEINS_FACTIONS = [
         "hq": "The Hall of Mirroring Dreams",
         "goal": "Internal Subversion — reduce a surface faction's Cunning by 2 via Subtle play.",
         "assets": [
-            ("Spies",          "Cunning","Multiple surface courts"),
+            ("Dream-Walkers",  "Cunning","Multiple surface courts"),
             ("Assassins",      "Cunning","Mirror Halls"),
             ("Cult Network",   "Cunning","Veins waystations"),
             ("Witch Coven",    "Magic",  "Mirror Halls"),
             ("Adept Order",    "Magic",  "Mirror Halls"),
-            ("Knights / Champions", "Force", "Black Glass Court"),
-            ("Living Idol",    "Magic",  "Sleeping Sanctum"),
+            ("Dream-Knights of the Black Glass Court", "Force", "Black Glass Court"),
+            ("Dream Anchor",   "Magic",  "Sleeping Sanctum"),
         ],
     },
     {
@@ -505,12 +598,12 @@ VEINS_FACTIONS = [
         "hq": "The Spore-Cathedral",
         "goal": "Religious Conversion — convert 3 rival assets via spore-cult infiltration.",
         "assets": [
-            ("Cult Network",   "Cunning","Slave-pens across the Veins"),
-            ("Spirit Walkers", "Magic",  "Spore-Cathedral"),
-            ("Saboteurs",      "Cunning","Cattle-races' larders"),
-            ("Death Cult",     "Magic",  "Carrion grounds"),
-            ("Informers",      "Cunning","Every slave market"),
-            ("Hedge Mages",    "Magic",  "Spore-Cathedral"),
+            ("Cult Network",        "Cunning","Slave-pens across the Veins"),
+            ("Spore-Wreaths",       "Cunning","Every slave market"),
+            ("Spore-Maddened Slaves","Force", "Cattle-races' larders"),
+            ("Spore-Cathedral Choir","Magic", "Spore-Cathedral"),
+            ("Death Cult",          "Magic",  "Carrion grounds"),
+            ("Hedge Mages",         "Magic",  "Spore-Cathedral"),
         ],
     },
     {
@@ -528,11 +621,11 @@ VEINS_FACTIONS = [
         "goal": "Tech / Magic Expansion — reach Magic 4 by stealing crystal lore.",
         "assets": [
             ("Eyes Everywhere","Cunning","Buzzing Halls"),
-            ("Magic Workshop", "Magic",  "Buzzing Halls"),
-            ("Battle Mages",   "Force",  "Crystal Pylons"),
+            ("Crystal Mines",  "Wealth", "Crystal Pylons"),
+            ("Crystal Lancers","Force",  "Crystal Pylons"),
             ("Bribed Officials","Cunning","Surface intelligence services"),
             ("Demonologists",  "Magic",  "Lower Buzzing Halls"),
-            ("Light Cavalry",  "Force",  "Mech-trolley tunnels"),
+            ("Magic Workshop", "Magic",  "Buzzing Halls"),
             ("Whisper Network","Cunning","Across the Veins"),
         ],
     },
@@ -573,13 +666,13 @@ VEINS_FACTIONS = [
         "hq": "The Lantern Holds",
         "goal": "Peaceable Kingdom — survive 3 turns without losing an asset.",
         "assets": [
-            ("Militia",        "Force",  "Lantern Holds"),
-            ("Light Cavalry",  "Force",  "Veins patrol routes"),
-            ("Spirit Walkers", "Magic",  "Lantern Holds"),
-            ("Farmers",        "Wealth", "Mushroom fields"),
-            ("Hedge Mages",    "Magic",  "Lantern Holds"),
-            ("Informers",      "Cunning","Across Gnonmen friend-networks"),
-            ("Border Fort",    "Force",  "Upper passes"),
+            ("Lantern Wardens",     "Force",  "Lantern Holds"),
+            ("Tunnel Crawlers",     "Force",  "Veins patrol routes"),
+            ("Spirit Walkers",      "Magic",  "Lantern Holds"),
+            ("Mushroom Fields",     "Wealth", "Surface of the Lantern Holds"),
+            ("Hearth-Lantern Shrine","Magic", "Lantern Holds"),
+            ("Lightless Cartographers","Cunning","Across Gnonmen friend-networks"),
+            ("Border Fort",         "Force",  "Upper passes"),
         ],
     },
     {
@@ -596,12 +689,12 @@ VEINS_FACTIONS = [
         "hq": "The Sunken Heart",
         "goal": "Invincible Valor — defeat an asset of twice the attacker's Cost.",
         "assets": [
-            ("Bound Spirit",   "Magic",  "Sunken Heart"),
-            ("Living Idol",    "Magic",  "Sunken Heart"),
-            ("Pretorian Guard","Force",  "Sunken Heart"),
-            ("Citadel",        "Force",  "Stone-fields"),
-            ("Ritual Casters", "Magic",  "Sunken Heart"),
-            ("Heavy Infantry", "Force",  "Substratal frontier"),
+            ("Stone-Voice Oracle",      "Magic",  "Sunken Heart"),
+            ("Stone-Eaters",            "Force",  "Sunken Heart"),
+            ("Substratal Tribute Stones","Wealth","Veins frontier"),
+            ("Citadel",                 "Force",  "Stone-fields"),
+            ("Ritual Casters",          "Magic",  "Sunken Heart"),
+            ("Bound Spirit",            "Magic",  "Substratal frontier"),
         ],
     },
     {
@@ -618,12 +711,12 @@ VEINS_FACTIONS = [
         "hq": "Each in their own maze",
         "goal": "Wealth of Worlds — Wealth 8 or 30+ Treasure stockpiled.",
         "assets": [
-            ("Wonderworker",   "Magic",  "Their personal maze"),
-            ("Adept Order",    "Magic",  "Janeen courts"),
-            ("Merchant Princes","Wealth","Trade-Vein hubs"),
-            ("Counting House", "Wealth", "Janeen courts"),
-            ("Bound Spirit",   "Magic",  "Each maze entrance"),
-            ("Seductive Cabal","Cunning","Surface and underdark salons"),
+            ("Wonderworker",         "Magic",  "Their personal maze"),
+            ("Adept Order",          "Magic",  "Janeen courts"),
+            ("Maze-Toll",            "Wealth", "Each maze entrance"),
+            ("Counting House",       "Wealth", "Janeen courts"),
+            ("Janeen Aesthete-Spies","Cunning","Surface and underdark salons"),
+            ("Bound Spirit",         "Magic",  "Janeen frontier"),
         ],
     },
     {
@@ -640,11 +733,12 @@ VEINS_FACTIONS = [
         "hq": "The Drowned Galleries",
         "goal": "Veins-Walker — establish permanent caravan path between two distant Veins.",
         "assets": [
-            ("Brigands",       "Force",  "Drowned Galleries"),
-            ("Smugglers",      "Cunning","Underwater Vein routes"),
-            ("Brigand Cell",   "Cunning","Wherever a recent battle left bodies"),
-            ("Hedge Mages",    "Magic",  "Drowned Galleries"),
-            ("Spirit Walkers", "Magic",  "Deep pools"),
+            ("Brigands",        "Force",  "Drowned Galleries"),
+            ("Smugglers",       "Cunning","Underwater Vein routes"),
+            ("Olm Listeners",   "Cunning","Drowned Galleries"),
+            ("Hidden Larder",   "Wealth", "Concealed gallery niches"),
+            ("Olm Anatomist",   "Magic",  "Drowned Galleries"),
+            ("Spirit Walkers",  "Magic",  "Deep pools"),
         ],
     },
 ]
@@ -734,12 +828,16 @@ def build_assets(wb):
         ("Cunning Assets", CUNNING_ASSETS),
         ("Wealth Assets", WEALTH_ASSETS),
         ("Magic Assets", MAGIC_ASSETS),
+        ("Setting Assets — Veins of the Earth (Force)", VEINS_FORCE_ASSETS),
+        ("Setting Assets — Veins of the Earth (Cunning)", VEINS_CUNNING_ASSETS),
+        ("Setting Assets — Veins of the Earth (Wealth)", VEINS_WEALTH_ASSETS),
+        ("Setting Assets — Veins of the Earth (Magic)", VEINS_MAGIC_ASSETS),
     ]:
         section_row(ws, row, block_label, 10)
         row += 1
         end = write_table(
             ws, row, ASSETS_HEADERS, block,
-            widths=[24, 10, 7, 7, 18, 12, 12, 16, 22, 60])
+            widths=[28, 10, 7, 7, 18, 12, 12, 18, 22, 60])
         row = end + 2
 
 
