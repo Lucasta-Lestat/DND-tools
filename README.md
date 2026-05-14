@@ -1,49 +1,53 @@
-# WWN Faction System — Veins of the Earth
+# DND-tools
+
+A small collection of spreadsheet-based tools for tabletop play.
+
+## Workbooks
+
+### 1. WWN Faction System — Veins of the Earth
 
 A spreadsheet implementation of the [Worlds Without Number](https://www.drivethrurpg.com/en/product/348791/worlds-without-number)
 faction subsystem (Kevin Crawford, Sine Nomine Publishing), prefilled with the
 principal cultures of Patrick Stuart and Scrap Princess's *Veins of the Earth*
 (Lamentations of the Flame Princess).
 
-## Files
+| File | What it is |
+| --- | --- |
+| `WWN_Veins_of_the_Earth_Factions.xlsx` | The workbook you use at the table. |
+| `build_workbook.py` | Generator script. Edit and re-run to tweak. |
+
+Sheets: README, Rules, Actions, Assets (core + Veins setting assets), Tags,
+Goals, Combat Tracker, Roster, one per faction (Knotsmen, Aelf-Adal, Funginids,
+dErO, Dvargir, Gnonmen, Substratals, Deep Janeen, Olm), and a Blank Faction
+template.
+
+### 2. D&D 5e Character Sheet (Homebrew)
+
+A fillable character sheet with four house rules baked into the formulas.
 
 | File | What it is |
 | --- | --- |
-| `WWN_Veins_of_the_Earth_Factions.xlsx` | The workbook you actually use at the table. |
-| `build_workbook.py` | Generator script that produces the workbook. Edit and re-run to tweak. |
+| `DnD_Character_Sheet.xlsx` | The workbook. |
+| `build_character_sheet.py` | Generator. |
 
-## Workbook layout
+**House rules:**
 
-| Sheet | Contents |
-| --- | --- |
-| **README** | Index of sheets and credits. |
-| **Rules** | Faction attributes, HP, treasure income, turn order, combat. |
-| **Actions** | Every action a faction can take on its turn. |
-| **Assets** | Master catalogue of Force / Cunning / Wealth / Magic assets with stats. |
-| **Tags** | Faction tags (including a small set of Veins-themed homebrew tags). |
-| **Goals** | Goal cards a faction can pursue for Faction XP. |
-| **Combat Tracker** | A fillable one-shot combat resolver. |
-| **Roster** | Summary row for every prefilled faction. |
-| **Faction - …** | One sheet per Veins of the Earth faction: attributes, tags, assets, 12-turn log. |
-| **Blank Faction** | Copy this sheet to add new factions of your own. |
+- **Slot-based inventory.** Total slots = Strength score. Each inventory entry
+  has a Slot Cost and the capacity bar turns red when you go over.
+- **Exhaustion (5.5e-style, 0–6).** Each level imposes -2 to all d20 tests and
+  -5 ft of speed. At level 6 the character dies. **Homebrew:** each level of
+  exhaustion also consumes 1 inventory slot.
+- **Death Tally.** A counter you can use openly to mirror the DM's secret 1d4
+  on a downed character.
+- **Static HP.** Max HP = (Class HP Base) + (CON modifier). Does **not**
+  increase as you level.
 
-## Veins of the Earth factions included
+Sheets: README, Character, Inventory, Combat & Spells, Features & Notes.
 
-The Knotsmen, Aelf-Adal, Funginids, dErO, Dvargir, Gnonmen, Substratals,
-Deep Janeen, and Olm.
-
-Each faction has interpretive starting values (attributes, treasure, tags, and a
-small roster of assets) suitable for sandbox play. Tweak to taste.
-
-## Regenerating the workbook
+## Regenerating
 
 ```sh
 pip install openpyxl
-python3 build_workbook.py
+python3 build_workbook.py            # faction workbook
+python3 build_character_sheet.py     # character sheet
 ```
-
-## Caveats
-
-Rules text in this workbook is paraphrased; consult the WWN rulebook for
-official wording and edge cases. A handful of homebrew faction tags are clearly
-marked as such on the **Tags** sheet.
