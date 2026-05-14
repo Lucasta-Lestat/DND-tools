@@ -17,24 +17,39 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 
 # ---------------------------------------------------------------------------
-# style helpers
+# style helpers — Veins of the Earth aesthetic
+#
+# Dark stone, bone-parchment lettering, dried-blood section headers, a
+# trace of cold lichen-glow on the calculated cells. Serif type throughout.
 # ---------------------------------------------------------------------------
-THIN = Side(border_style="thin", color="888888")
+THIN = Side(border_style="thin", color="3A3530")  # subtle bone-brown
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-HEADER_FILL = PatternFill("solid", fgColor="1F2A44")  # dark navy
-SUB_FILL = PatternFill("solid", fgColor="3E5377")     # mid navy
-HOMEBREW_FILL = PatternFill("solid", fgColor="7A3E5E")  # plum — house rules
-LABEL_FILL = PatternFill("solid", fgColor="F2F2F2")
-INPUT_FILL = PatternFill("solid", fgColor="FFF6D8")   # cream — user inputs
-CALC_FILL = PatternFill("solid", fgColor="E8F0FF")    # pale blue — calculated
-WARN_FILL = PatternFill("solid", fgColor="F7C9C9")    # red — over-capacity
+HEADER_FILL = PatternFill("solid", fgColor="0B0B0B")    # the dark of the Veins
+SUB_FILL = PatternFill("solid", fgColor="4A1818")       # dried blood
+HOMEBREW_FILL = PatternFill("solid", fgColor="5C2A3F")  # bruised plum — house rules
+LABEL_FILL = PatternFill("solid", fgColor="1A1817")     # dressed stone
+INPUT_FILL = PatternFill("solid", fgColor="2A2520")     # parchment-stained dark
+CALC_FILL = PatternFill("solid", fgColor="1F2828")      # lichen-glow stone
+WARN_FILL = PatternFill("solid", fgColor="A03333")      # rust — over-capacity / death
+# conditional-formatting dxf uses bgColor, not fgColor
+WARN_DXF = PatternFill("solid", bgColor="A03333")
+ASH_FILL = PatternFill("solid", fgColor="14110F")       # for epigraph rows
 
-H1 = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
-H2 = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
-H3 = Font(name="Calibri", size=11, bold=True)
-BODY = Font(name="Calibri", size=11)
-ITAL = Font(name="Calibri", size=11, italic=True, color="555555")
+TEXT_BONE = "E8DBC4"     # primary on dark — bone / cream
+TEXT_ASH = "9C8F7A"      # italics / captions
+TEXT_BLOOD = "D67373"    # accent — warnings
+TEXT_LICHEN = "8FA876"   # accent — positive/calc emphasis
+
+HEAD_FONT = "Book Antiqua"  # falls back to Cambria/Caladea where unavailable
+BODY_FONT = "Cambria"
+
+H1 = Font(name=HEAD_FONT, size=18, bold=True, color=TEXT_BONE)
+H2 = Font(name=HEAD_FONT, size=12, bold=True, color=TEXT_BONE)
+H3 = Font(name=HEAD_FONT, size=11, bold=True, color=TEXT_BONE)
+BODY = Font(name=BODY_FONT, size=11, color=TEXT_BONE)
+ITAL = Font(name=BODY_FONT, size=11, italic=True, color=TEXT_ASH)
+EPI = Font(name=HEAD_FONT, size=11, italic=True, color=TEXT_ASH)
 
 WRAP_TOP = Alignment(wrap_text=True, vertical="top")
 CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -46,8 +61,8 @@ def title_row(ws, row, text, span, fill=HEADER_FILL):
     c = ws.cell(row=row, column=1, value=text)
     c.font = H1
     c.fill = fill
-    c.alignment = Alignment(horizontal="left", vertical="center")
-    ws.row_dimensions[row].height = 24
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 32
 
 
 def section_row(ws, row, text, span, fill=SUB_FILL):
@@ -55,8 +70,8 @@ def section_row(ws, row, text, span, fill=SUB_FILL):
     c = ws.cell(row=row, column=1, value=text)
     c.font = H2
     c.fill = fill
-    c.alignment = Alignment(horizontal="left", vertical="center")
-    ws.row_dimensions[row].height = 19
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[row].height = 22
 
 
 def label(ws, row, col, text):
@@ -70,11 +85,22 @@ def label(ws, row, col, text):
 
 def header_cell(ws, row, col, text, fill=SUB_FILL):
     c = ws.cell(row=row, column=col, value=text)
-    c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    c.font = Font(name=HEAD_FONT, size=11, bold=True, color=TEXT_BONE)
     c.fill = fill
     c.alignment = CENTER
     c.border = BORDER
     return c
+
+
+def epigraph_row(ws, row, span, text, fill=ASH_FILL):
+    """A single italic line for atmospheric flavour text under a title."""
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+    c = ws.cell(row=row, column=1, value=text)
+    c.font = EPI
+    c.fill = fill
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    c.border = BORDER
+    ws.row_dimensions[row].height = 18
 
 
 def input_cell(ws, row, col, value=None, center=False):
@@ -138,41 +164,51 @@ CHECK = "✓"
 def build_readme(wb):
     ws = wb.active
     ws.title = "README"
-    ws.sheet_properties.tabColor = "1F2A44"
-    title_row(ws, 1, "D&D 5e Character Sheet — Homebrew", 4)
+    ws.sheet_properties.tabColor = "0B0B0B"
+    title_row(ws, 1, "A Sheet for Delvers of the Veins", 4)
+    epigraph_row(ws, 2, 4,
+                 "  You go down because there is something down there. "
+                 "You take with you what your back can carry. Past that, you leave it behind.")
 
     ws.column_dimensions["A"].width = 26
     ws.column_dimensions["B"].width = 90
 
     intro = (
-        "A printable / fillable D&D 5e character sheet with four house rules baked into the "
-        "formulas. Edit the cream cells, read the pale-blue cells (those are calculated).")
-    ws.merge_cells("A3:B3")
-    c = ws.cell(row=3, column=1, value=intro)
+        "A 5e character sheet rebuilt for play in the Veins of the Earth. The vanilla bones "
+        "of a character sheet, but reworked for the dark: your pack is what your back can "
+        "carry, tiredness fills it, and your hit points are what they are — level grants "
+        "skill, not flesh. Edit the parchment-dark cells. Read the lichen-glow cells; those "
+        "are calculated.")
+    ws.merge_cells("A4:B4")
+    c = ws.cell(row=4, column=1, value=intro)
     c.alignment = WRAP_TOP
     c.font = BODY
-    ws.row_dimensions[3].height = 36
+    c.fill = LABEL_FILL
+    c.border = BORDER
+    ws.row_dimensions[4].height = 64
 
-    section_row(ws, 5, "House rules in this sheet", 4, fill=HOMEBREW_FILL)
+    section_row(ws, 6, "House Rules", 4, fill=HOMEBREW_FILL)
     rules = [
-        ("Slot-based inventory",
-         "Your total carrying slots equal your Strength score. Each inventory entry has a "
-         "Slot Cost; the workbook sums them and turns the capacity bar red if you go over."),
-        ("Exhaustion (5.5e-style)",
-         "Exhaustion runs 0–6. Each level imposes -2 to all d20 tests and reduces speed by "
-         "5 ft. At level 6 the character dies. HOMEBREW: each level of exhaustion also "
-         "consumes 1 inventory slot, so a heavily-laden character will start to drop "
-         "things as they tire."),
-        ("Death Tally",
-         "At 0 HP the DM secretly rolls 1d4 — that many rounds until the character dies. "
-         "This sheet just exposes a counter so the player can track it openly if the table "
-         "prefers, or so the DM can mirror it on the screen."),
+        ("The Pack",
+         "Your carrying capacity is your Strength score, in slots. Heavy things take more. "
+         "The dark always offers more to carry than you can — the capacity bar reddens the "
+         "moment you've said yes to too much."),
+        ("Tiredness (Exhaustion 0–6)",
+         "Each level applies -2 to all d20 tests and -5 ft to your speed; at level 6 the "
+         "dark wins. The Veins charge an extra fee: each level of exhaustion also fills a "
+         "slot in your pack, since a tired delver fumbles, drops, leaves things behind."),
+        ("The Death Tally",
+         "When you hit 0 HP the GM rolls 1d4 in secret. That is the number of rounds before "
+         "the dark takes you. The Death Tally cell is for the GM to mirror, or for the "
+         "table that prefers their dying open."),
         ("Static HP",
-         "Max HP = (Class HP Base) + (CON modifier), and does not change as you level. "
-         "Set Class HP Base to whatever the table agrees on at character creation (e.g. "
-         "fighter's d10 max = 10, wizard's d6 max = 6, or a custom value)."),
+         "You do not grow harder to kill the deeper you go. Max HP = (Class HP Base) + "
+         "(CON modifier). Set Class HP Base once at session zero — a fighter's d10 maxes at "
+         "10, a wizard's d6 at 6, or pick your own number — and it stays there. Level "
+         "grants skill, not flesh."),
     ]
-    r = 6
+    base_row = 7
+    r = base_row
     for name, desc in rules:
         c = ws.cell(row=r, column=1, value=name)
         c.font = H3
@@ -184,17 +220,17 @@ def build_readme(wb):
         c.font = BODY
         c.fill = INPUT_FILL
         c.border = BORDER
-        ws.row_dimensions[r].height = 48
+        ws.row_dimensions[r].height = 60
         r += 1
 
     section_row(ws, r + 1, "Sheets", 4)
     sheets = [
-        ("Character", "Identity, ability scores, combat, homebrew trackers, skills."),
-        ("Inventory", "Slot-based inventory grid with capacity bar."),
+        ("Character", "Names, faculties, combat, the burdens, practiced crafts."),
+        ("Inventory", "Pack & pockets — what your back chose to carry."),
         ("Combat & Spells",
-         "Weapons / attacks block, spell save DC, spell slot tracker, spell list."),
+         "Steel & sorcery — weapons, the spellcasting block, slots, spells known."),
         ("Features & Notes",
-         "Class, racial and background features, languages, proficiencies, backstory."),
+         "Lineage, tongue, the things that made you — and notes from the dark."),
     ]
     r += 2
     for sheet_name, desc in sheets:
@@ -206,16 +242,18 @@ def build_readme(wb):
         c = ws.cell(row=r, column=2, value=desc)
         c.font = BODY
         c.alignment = WRAP_TOP
+        c.fill = LABEL_FILL
         c.border = BORDER
         ws.row_dimensions[r].height = 22
         r += 1
 
-    section_row(ws, r + 1, "Colour key", 4)
+    section_row(ws, r + 1, "Colour Key", 4)
     swatches = [
-        (INPUT_FILL, "Cream — user input. Type here."),
-        (CALC_FILL,  "Pale blue — calculated. Don't overwrite."),
-        (LABEL_FILL, "Grey — field label."),
-        (WARN_FILL,  "Red — over-capacity warning."),
+        (INPUT_FILL, "Parchment-dark — write here."),
+        (CALC_FILL,  "Lichen-glow — calculated. Do not overwrite."),
+        (LABEL_FILL, "Dressed stone — field label."),
+        (HOMEBREW_FILL, "Bruised plum — house-rule fields."),
+        (WARN_FILL,  "Rust — the dark is winning (over capacity, dying)."),
     ]
     r += 2
     for fill, desc in swatches:
@@ -224,6 +262,7 @@ def build_readme(wb):
         c.border = BORDER
         c = ws.cell(row=r, column=2, value=desc)
         c.font = BODY
+        c.fill = LABEL_FILL
         c.alignment = LEFT_TOP
         c.border = BORDER
         r += 1
@@ -234,14 +273,16 @@ def build_readme(wb):
 # ---------------------------------------------------------------------------
 def build_character(wb):
     ws = wb.create_sheet("Character")
-    ws.sheet_properties.tabColor = "3E5377"
+    ws.sheet_properties.tabColor = "4A1818"
 
     # column widths — 10 cols
     widths = [22, 10, 8, 10, 16, 12, 14, 14, 14, 18]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    title_row(ws, 1, "Character Sheet", 10)
+    title_row(ws, 1, "A Delver — Names & Numbers", 10)
+    epigraph_row(ws, 2, 10,
+                 "  Lit lantern. Finite name. The dark is patient.")
 
     # ---- identity, rows 3-5 ----
     label(ws, 3, 1, "Character Name")
@@ -279,7 +320,7 @@ def build_character(wb):
     calc_cell(ws, 5, 10, "=MAX(0,H5-5*$A$24)")  # 5e exhaustion: -5 ft/level
 
     # ---- ability scores rows 7-14 ----
-    section_row(ws, 7, "Ability Scores & Saving Throws", 10)
+    section_row(ws, 7, "Faculties & Saving Throws", 10)
     for ci, h in enumerate(["Ability", "Score", "Mod", "Save Prof?", "Save Total"], 1):
         header_cell(ws, 8, ci, h)
 
@@ -303,11 +344,11 @@ def build_character(wb):
             f'=C{r}+IF(D{r}="{CHECK}",$B$5,0)-2*$A$24')
 
     note_row(ws, 15, 10,
-             "All d20 tests (attacks, saves, ability checks, skill checks) take a -2 "
-             "penalty per level of exhaustion. The Save Total column already applies this.")
+             "Tiredness has weight. Every d20 test — attack, save, check — loses 2 per "
+             "level of exhaustion; the Save column already does this for you.")
 
     # ---- combat block, rows 17-19 ----
-    section_row(ws, 17, "Combat & Hit Points", 10)
+    section_row(ws, 17, "Combat & the Dying Hours", 10)
     combat_headers = ["AC", "Initiative", "Hit Dice (total)", "Class HP Base",
                       "CON mod", "Max HP", "Current HP", "Temp HP", "Death Saves S/F"]
     for ci, h in enumerate(combat_headers, 1):
@@ -323,12 +364,12 @@ def build_character(wb):
     input_cell(ws, 19, 9, "", center=True)               # death save successes/failures
 
     note_row(ws, 20, 10,
-             "House rule — HP does NOT scale with level. Max HP = Class HP Base + CON "
-             "modifier. Set Class HP Base to your class's HP-die maximum (or whatever the "
-             "table agrees on at session zero).")
+             "You do not grow harder to kill the deeper you go. Max HP = Class HP Base + "
+             "CON modifier; set the base once and leave it. Level grants skill, not flesh.")
 
     # ---- homebrew trackers, rows 22-25 ----
-    section_row(ws, 22, "Homebrew Trackers", 10, fill=HOMEBREW_FILL)
+    section_row(ws, 22, "Burdens — Exhaustion, Death, the Pack", 10,
+                fill=HOMEBREW_FILL)
     home_headers = ["Exhaustion (0-6)", "Death Tally", "STR Score",
                     "Item Slots Used", "Total Slots Used", "Slots Free",
                     "d20 Penalty", "Speed Penalty"]
@@ -345,14 +386,14 @@ def build_character(wb):
     calc_cell(ws, 24, 8, "=-5*A24")                                # speed penalty
 
     note_row(ws, 25, 10,
-             "Slot Total = STR.  Slots used = items + exhaustion level. If Slots Free goes "
-             "negative the capacity bar on the Inventory sheet turns red — drop or stash "
-             "until you fit.")
+             "Your back's worth: Slot Total = STR.  Slots used = items + exhaustion. If "
+             "Slots Free turns negative the Inventory capacity bar reddens — drop, cache, "
+             "or leave behind until you fit again.")
 
     # over-capacity highlight on this sheet
     ws.conditional_formatting.add(
         "F24",
-        FormulaRule(formula=["$F$24<0"], fill=WARN_FILL))
+        FormulaRule(formula=["$F$24<0"], fill=WARN_DXF))
 
     # exhaustion 0..6 validation
     dv_ex = DataValidation(
@@ -369,7 +410,7 @@ def build_character(wb):
     dv_dt.add(ws.cell(row=24, column=2))
 
     # ---- skills, rows 27+ ----
-    section_row(ws, 27, "Skills", 10)
+    section_row(ws, 27, "Skills & Practiced Crafts", 10)
     for ci, h in enumerate(["Skill", "Ability", "Prof?", "Expertise?",
                             "Modifier", "Notes"], 1):
         header_cell(ws, 28, ci, h)
@@ -412,13 +453,15 @@ def build_character(wb):
 # ---------------------------------------------------------------------------
 def build_inventory(wb):
     ws = wb.create_sheet("Inventory")
-    ws.sheet_properties.tabColor = "70AD47"
+    ws.sheet_properties.tabColor = "3A2F2A"
 
     widths = [6, 30, 10, 10, 60]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    title_row(ws, 1, "Inventory — slot based", 5)
+    title_row(ws, 1, "What You Carry — Slot by Slot", 5)
+    epigraph_row(ws, 2, 5,
+                 "  Heavy things take more. The dark always offers more to carry than you can.")
 
     # capacity block — row 3 headers, row 4 values
     for ci, h in enumerate(["STR Slots", "Exhaustion Slots", "Item Slots Used",
@@ -434,14 +477,15 @@ def build_inventory(wb):
     # red flag if Free < 0
     ws.conditional_formatting.add(
         "A4:E4",
-        FormulaRule(formula=["$E$4<0"], fill=WARN_FILL))
+        FormulaRule(formula=["$E$4<0"], fill=WARN_DXF))
 
     note_row(ws, 5, 5,
-             "Each level of exhaustion auto-consumes 1 slot. Fill the Slot Cost column for "
-             "each item; the capacity bar turns red if you go over.")
+             "Tiredness fills slots before items do — each level of exhaustion takes one. "
+             "Set the Slot Cost for each thing in your pack; the capacity bar runs rust the "
+             "moment you've taken on more than your back will keep.")
 
     # inventory grid — 50 lines should be plenty
-    section_row(ws, 7, "Items", 5)
+    section_row(ws, 7, "Pack & Pockets", 5)
     for ci, h in enumerate(["#", "Item", "Slot Cost", "Qty", "Notes"], 1):
         header_cell(ws, 8, ci, h)
 
@@ -470,16 +514,18 @@ def build_inventory(wb):
 # ---------------------------------------------------------------------------
 def build_combat_spells(wb):
     ws = wb.create_sheet("Combat & Spells")
-    ws.sheet_properties.tabColor = "C0504D"
+    ws.sheet_properties.tabColor = "6B2E2E"
 
     widths = [22, 14, 16, 18, 14, 14, 14, 14, 50]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    title_row(ws, 1, "Combat & Spells", 9)
+    title_row(ws, 1, "Steel & Sorcery", 9)
+    epigraph_row(ws, 2, 9,
+                 "  Steel is honest. Magic is rented. Both run out.")
 
     # ---- attacks ----
-    section_row(ws, 3, "Weapons & Attacks", 9)
+    section_row(ws, 3, "Weapons & What They Cut", 9)
     for ci, h in enumerate(["Name", "Ability", "Prof?", "Attack Bonus",
                             "Damage", "Range", "Type", "Ammo / Uses", "Notes"], 1):
         header_cell(ws, 4, ci, h)
@@ -489,7 +535,7 @@ def build_combat_spells(wb):
             input_cell(ws, r, ci)
 
     # ---- spellcasting summary ----
-    section_row(ws, 17, "Spellcasting", 9)
+    section_row(ws, 17, "Spellcraft — The Rented Power", 9)
     for ci, h in enumerate(["Spellcasting Class", "Spell Ability",
                             "Spell Save DC", "Spell Attack Bonus",
                             "Ritual?", "Concentration?", "Notes"], 1):
@@ -509,11 +555,10 @@ def build_combat_spells(wb):
              "Spell Attack Bonus = Proficiency Bonus + Spellcasting Ability modifier.")
 
     # ---- spell slot tracker ----
-    section_row(ws, 22, "Spell Slots", 9)
+    section_row(ws, 22, "Spell Slots — How Much Magic Is Left in You", 9)
     for ci, h in enumerate(["Level", "1st", "2nd", "3rd", "4th", "5th",
                             "6th", "7th", "8th"], 1):
         header_cell(ws, 23, ci, h)
-    header_cell(ws, 23 + 1 - 1, 1, "Level")  # already done; keep loop simple
     label(ws, 24, 1, "Total")
     label(ws, 25, 1, "Used")
     label(ws, 26, 1, "Remaining")
@@ -530,7 +575,7 @@ def build_combat_spells(wb):
     calc_cell(ws, 26, 10, "=J24-J25")
 
     # ---- spell list ----
-    section_row(ws, 28, "Spell List", 9)
+    section_row(ws, 28, "Spells Known & Prepared", 9)
     for ci, h in enumerate(["Spell", "Level", "School", "Cast Time", "Range",
                             "Components", "Duration", "Prepared?", "Notes"], 1):
         header_cell(ws, 29, ci, h)
@@ -558,24 +603,26 @@ def build_combat_spells(wb):
 # ---------------------------------------------------------------------------
 def build_features(wb):
     ws = wb.create_sheet("Features & Notes")
-    ws.sheet_properties.tabColor = "8064A2"
+    ws.sheet_properties.tabColor = "5C2A3F"
 
     widths = [22, 70]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    title_row(ws, 1, "Features, Languages & Notes", 2)
+    title_row(ws, 1, "Lineage, Tongue & Tale", 2)
+    epigraph_row(ws, 2, 2,
+                 "  Where you came from is a place no one down here asks about.")
 
     sections = [
         ("Class Features", 8),
-        ("Racial Features", 6),
+        ("Racial / Ancestry Features", 6),
         ("Background Feature", 2),
-        ("Feats", 4),
-        ("Languages", 3),
-        ("Other Proficiencies (tools, instruments, etc.)", 4),
-        ("Allies, Organisations & Contacts", 4),
-        ("Backstory", 6),
-        ("Session Notes", 8),
+        ("Feats & Earned Tricks", 4),
+        ("Tongues You Speak", 3),
+        ("Other Proficiencies (tools, instruments, the disassembling of things)", 4),
+        ("Allies, Pacts & Contacts", 4),
+        ("Where You Came From — Backstory", 6),
+        ("Notes From the Dark — Session Log", 8),
     ]
     r = 3
     for title, rows in sections:
