@@ -793,16 +793,26 @@ def build_readme(wb):
         ("Goals", "Goals factions choose to pursue for FacXP."),
         ("Combat Tracker", "Fillable one-shot combat resolver."),
         ("Roster", "Summary line for every Veins-of-the-Earth faction."),
-        ("Faction -Knotsmen", "Per-faction sheet — stats, assets, current goal, notes."),
-        ("Faction -Aelf-Adal", "Per-faction sheet."),
-        ("Faction -Funginids", "Per-faction sheet."),
-        ("Faction -dErO", "Per-faction sheet."),
-        ("Faction -Dvargir", "Per-faction sheet."),
-        ("Faction -Gnonmen", "Per-faction sheet."),
-        ("Faction -Substratals", "Per-faction sheet."),
-        ("Faction -Deep Janeen", "Per-faction sheet."),
-        ("Faction -Olm", "Per-faction sheet."),
+        ("Faction - <name>", "Per-faction sheet for each of the nine factions."),
         ("Blank Faction", "Empty per-faction sheet you can copy for new factions."),
+        ("Asset Register",
+         "Source of truth for every asset instance: faction, asset, location, "
+         "current/max HP, stealthed?. Edit here when assets are created, moved, "
+         "or destroyed."),
+        ("Locations Matrix",
+         "Pivot view derived from Asset Register: rows = locations, columns = "
+         "factions, cells list assets present (with current/max HP)."),
+        ("Action Sheet",
+         "One row per (turn × faction). Dropdowns for Action / Acting Asset / "
+         "Asset to Create / Target are filtered to that faction's possibilities."),
+        ("Turn Summary",
+         "Resolved ledger: treasure income, upkeep, spend, end-of-turn balance, "
+         "auto-rolled combat dice. Press F9 to roll; paste-special as values to "
+         "lock a turn."),
+        ("_Lookups",
+         "Hidden-friendly helper sheet: structured catalog, faction state, "
+         "locations table, and the per-faction spill ranges that drive the "
+         "Action Sheet's filtered dropdowns."),
     ]
     section_row(ws, 6, "Sheets in this workbook", 6)
     end = write_table(
@@ -1066,6 +1076,652 @@ def build_blank_faction(wb):
                 widths=[6, 14, 28, 28, 22, 40])
 
 
+# ---------------------------------------------------------------------------
+# Catalog parsing helpers (used by the automation sheets)
+# ---------------------------------------------------------------------------
+ATTR_CODE_TO_NAME = {"F": "Force", "C": "Cunning", "W": "Wealth", "M": "Magic"}
+
+
+def parse_attack(atk_text):
+    """'F vs F' -> ('Force','Force').  '—' -> ('','')."""
+    if not atk_text or atk_text.strip() in ("—", "-", ""):
+        return ("", "")
+    parts = [p.strip() for p in atk_text.split("vs")]
+    if len(parts) != 2:
+        return ("", "")
+    return (ATTR_CODE_TO_NAME.get(parts[0], ""),
+            ATTR_CODE_TO_NAME.get(parts[1], ""))
+
+
+def parse_dice(text):
+    """'1d8' -> (1,8); '2d6' -> (2,6); '—' -> (0,0)."""
+    if not text or text.strip() in ("—", "-", ""):
+        return (0, 0)
+    txt = text.strip().lower()
+    if "d" not in txt:
+        return (0, 0)
+    n_str, d_str = txt.split("d", 1)
+    try:
+        n = int(n_str) if n_str else 1
+        d = int(d_str)
+        return (n, d)
+    except ValueError:
+        return (0, 0)
+
+
+def parse_min_attr(text):
+    """'Force 3, Magic 1' -> [('Force',3),('Magic',1)]."""
+    if not text or text.strip() in ("—", "-", ""):
+        return []
+    out = []
+    for part in text.split(","):
+        tokens = part.strip().split()
+        if len(tokens) >= 2:
+            try:
+                out.append((tokens[0], int(tokens[-1])))
+            except ValueError:
+                continue
+    return out
+
+
+def sanitize_name(name):
+    """Faction name -> Excel-safe identifier (used for spill-range cell positions
+    only; we don't actually create defined names since we reference spill cells
+    directly via the Excel-365 '#' operator)."""
+    cleaned = name.replace("The ", "")
+    out = []
+    for ch in cleaned:
+        if ch.isalnum() or ch == "_":
+            out.append(ch)
+        elif ch in (" ", "-"):
+            out.append("_")
+    return "".join(out)
+
+
+ASSET_BLOCKS_FOR_LOOKUP = [
+    ("Force / Standard", FORCE_ASSETS),
+    ("Cunning / Standard", CUNNING_ASSETS),
+    ("Wealth / Standard", WEALTH_ASSETS),
+    ("Magic / Standard", MAGIC_ASSETS),
+    ("Force / Setting", VEINS_FORCE_ASSETS),
+    ("Cunning / Setting", VEINS_CUNNING_ASSETS),
+    ("Wealth / Setting", VEINS_WEALTH_ASSETS),
+    ("Magic / Setting", VEINS_MAGIC_ASSETS),
+]
+
+# ----- automation knobs -----
+TURNS = 20
+N_FACTIONS = len(VEINS_FACTIONS)
+
+ACTION_OPTIONS = [
+    "Pass", "Attack", "Move Asset", "Heal Damage", "Expand Influence",
+    "Refit Asset", "Create Asset", "Hide Asset", "Sell Asset",
+    "Use Asset Ability", "Diplomatic Exchange",
+]
+
+
+def _band(ws, row, ncols, fill):
+    for ci in range(1, ncols + 1):
+        ws.cell(row=row, column=ci).fill = fill
+
+
+# ---------------------------------------------------------------------------
+# _Lookups sheet — structured catalog, faction state, locations, spill ranges
+# ---------------------------------------------------------------------------
+def build_lookups(wb):
+    ws = wb.create_sheet("_Lookups")
+    ws.sheet_properties.tabColor = "808080"
+
+    # ---- Catalog table at A1 ----
+    cat_headers = [
+        "Name", "Category", "Type", "Cost", "MaxHP",
+        "AtkText", "AtkAttr", "DefAttr",
+        "DmgText", "DmgN", "DmgDie",
+        "CtrText", "CtrN", "CtrDie",
+        "MinAttrText", "Req1Attr", "Req1Val", "Req2Attr", "Req2Val",
+        "Traits", "Notes",
+    ]
+    for ci, h in enumerate(cat_headers, 1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+
+    cat_rows = []
+    for category, block in ASSET_BLOCKS_FOR_LOOKUP:
+        for name, atype, cost, hp, atk, dmg, ctr, minattr, traits, notes in block:
+            atk_a, def_a = parse_attack(atk)
+            dn, dd = parse_dice(dmg)
+            cn, cd = parse_dice(ctr)
+            reqs = parse_min_attr(minattr)
+            r1a = reqs[0][0] if len(reqs) > 0 else ""
+            r1v = reqs[0][1] if len(reqs) > 0 else 0
+            r2a = reqs[1][0] if len(reqs) > 1 else ""
+            r2v = reqs[1][1] if len(reqs) > 1 else 0
+            cat_rows.append([
+                name, category, atype, cost, hp,
+                atk, atk_a, def_a,
+                dmg, dn, dd,
+                ctr, cn, cd,
+                minattr, r1a, r1v, r2a, r2v,
+                traits, notes,
+            ])
+
+    for ri, row in enumerate(cat_rows, 2):
+        for ci, val in enumerate(row, 1):
+            ws.cell(row=ri, column=ci, value=val)
+
+    cat_last_row = 1 + len(cat_rows)
+    cat_ref = f"A1:{get_column_letter(len(cat_headers))}{cat_last_row}"
+    cat_table = Table(displayName="Catalog", ref=cat_ref)
+    cat_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight15", showRowStripes=True)
+    ws.add_table(cat_table)
+
+    # ---- FactionState table at column W (col 23) ----
+    fs_start = 23
+    fs_headers = ["Faction", "Force", "Cunning", "Wealth", "Magic",
+                  "Treasure", "HQ"]
+    for ci, h in enumerate(fs_headers, fs_start):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+
+    for ri, f in enumerate(VEINS_FACTIONS, 2):
+        ws.cell(row=ri, column=fs_start + 0, value=f["name"])
+        ws.cell(row=ri, column=fs_start + 1, value=f["force"])
+        ws.cell(row=ri, column=fs_start + 2, value=f["cunning"])
+        ws.cell(row=ri, column=fs_start + 3, value=f["wealth"])
+        ws.cell(row=ri, column=fs_start + 4, value=f["magic"])
+        ws.cell(row=ri, column=fs_start + 5, value=f["treasure"])
+        ws.cell(row=ri, column=fs_start + 6, value=f["hq"])
+
+    fs_last_row = 1 + len(VEINS_FACTIONS)
+    fs_ref = (f"{get_column_letter(fs_start)}1:"
+              f"{get_column_letter(fs_start + len(fs_headers) - 1)}{fs_last_row}")
+    fs_table = Table(displayName="FactionState", ref=fs_ref)
+    fs_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight10", showRowStripes=True)
+    ws.add_table(fs_table)
+
+    # ---- Locations table at column AE (col 31) ----
+    loc_start = 31
+    for ci, h in enumerate(["Location", "Note"], loc_start):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+
+    for ri, (loc, note) in enumerate(LOCATIONS, 2):
+        ws.cell(row=ri, column=loc_start + 0, value=loc)
+        ws.cell(row=ri, column=loc_start + 1, value=note)
+    loc_last_row = 1 + len(LOCATIONS)
+    loc_ref = (f"{get_column_letter(loc_start)}1:"
+               f"{get_column_letter(loc_start + 1)}{loc_last_row}")
+    loc_table = Table(displayName="Locations", ref=loc_ref)
+    loc_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight12", showRowStripes=True)
+    ws.add_table(loc_table)
+
+    # ---- Per-faction spills (current assets and creatable assets) ----
+    asset_spill_start = 34   # AH
+    creat_spill_start = 44   # AR
+
+    ws.cell(row=1, column=asset_spill_start - 1,
+            value="-- per-faction current assets --").font = H3
+    ws.cell(row=1, column=creat_spill_start - 1,
+            value="-- per-faction creatable assets --").font = H3
+
+    # we record where each faction's spill anchor is, so the Action Sheet's
+    # validations can reference the right '#' spill range
+    asset_spill_cells = {}
+    creat_spill_cells = {}
+
+    for fi, f in enumerate(VEINS_FACTIONS):
+        col_a = asset_spill_start + fi
+        col_c = creat_spill_start + fi
+        ws.cell(row=1, column=col_a, value=f["name"]).font = H3
+        ws.cell(row=1, column=col_c, value=f["name"]).font = H3
+
+        fname = f["name"]
+        # Distinct asset names this faction currently owns (for Move/Attack/Heal/Hide/Sell)
+        ws.cell(row=2, column=col_a, value=(
+            f'=IFERROR(SORT(UNIQUE(FILTER(Register[Asset],'
+            f' Register[Faction]="{fname}", "(none)"))), "(none)")'))
+
+        # Catalog entries this faction currently meets the requirements for
+        # AND can afford. Req tests use a (req-empty)+(req-met) OR-pattern.
+        ws.cell(row=2, column=col_c, value=(
+            '=IFERROR(SORT(FILTER(Catalog[Name], '
+            f'(Catalog[Cost]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Treasure]))*'
+            '((Catalog[Req1Attr]="")+'
+            f'((Catalog[Req1Attr]="Force")*(Catalog[Req1Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Force])))+'
+            f'((Catalog[Req1Attr]="Cunning")*(Catalog[Req1Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Cunning])))+'
+            f'((Catalog[Req1Attr]="Wealth")*(Catalog[Req1Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Wealth])))+'
+            f'((Catalog[Req1Attr]="Magic")*(Catalog[Req1Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Magic]))))*'
+            '((Catalog[Req2Attr]="")+'
+            f'((Catalog[Req2Attr]="Force")*(Catalog[Req2Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Force])))+'
+            f'((Catalog[Req2Attr]="Cunning")*(Catalog[Req2Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Cunning])))+'
+            f'((Catalog[Req2Attr]="Wealth")*(Catalog[Req2Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Wealth])))+'
+            f'((Catalog[Req2Attr]="Magic")*(Catalog[Req2Val]<=XLOOKUP("{fname}",FactionState[Faction],FactionState[Magic]))))'
+            ', "(none)")), "(none)")'))
+
+        asset_spill_cells[fname] = (
+            f"_Lookups!${get_column_letter(col_a)}$2#")
+        creat_spill_cells[fname] = (
+            f"_Lookups!${get_column_letter(col_c)}$2#")
+
+        # Wrap each spill range in a defined name. Data validation references
+        # defined names more reliably than raw spill addresses across Excel
+        # versions.
+        san = sanitize_name(f["name"])
+        wb.defined_names[f"Assets_{san}"] = DefinedName(
+            f"Assets_{san}",
+            attr_text=f"_Lookups!${get_column_letter(col_a)}$2#")
+        wb.defined_names[f"Creatable_{san}"] = DefinedName(
+            f"Creatable_{san}",
+            attr_text=f"_Lookups!${get_column_letter(col_c)}$2#")
+
+    # Stash those addresses on the workbook for other builders to use.
+    wb._asset_spill_cells = asset_spill_cells
+    wb._creat_spill_cells = creat_spill_cells
+
+    # column widths — keep the lookup columns reasonable
+    for col in range(1, 22):
+        ws.column_dimensions[get_column_letter(col)].width = 13
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["U"].width = 40
+    for col in range(fs_start, fs_start + len(fs_headers)):
+        ws.column_dimensions[get_column_letter(col)].width = 12
+    ws.column_dimensions[get_column_letter(fs_start + len(fs_headers) - 1)].width = 28
+    ws.column_dimensions[get_column_letter(loc_start)].width = 28
+    ws.column_dimensions[get_column_letter(loc_start + 1)].width = 50
+
+
+# ---------------------------------------------------------------------------
+# Asset Register — the source of truth for who has what, where
+# ---------------------------------------------------------------------------
+def build_asset_register(wb):
+    ws = wb.create_sheet("Asset Register")
+    ws.sheet_properties.tabColor = "8064A2"
+    title_row(ws, 1, "Asset Register — every asset, where it stands", 14)
+
+    headers = ["ID", "Faction", "Asset", "Type", "Location",
+               "Cost", "MaxHP", "CurHP",
+               "Attack", "Damage", "Counter",
+               "Traits", "Stealthed?", "Notes"]
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+        c.border = BORDER
+
+    rid = 0
+    register_rows = []
+    for f in VEINS_FACTIONS:
+        for asset_name, atype, location in f["assets"]:
+            rid += 1
+            match = next((row for row in ALL_ASSETS if row[0] == asset_name), None)
+            if match:
+                _, _, cost, hp, atk, dmg, ctr, _minattr, traits, _ = match
+            else:
+                cost, hp, atk, dmg, ctr, traits = "?", "?", "?", "?", "?", "?"
+            stealthed = "Yes" if isinstance(traits, str) and "Stealth" in traits else ""
+            register_rows.append([
+                rid, f["name"], asset_name, atype, location,
+                cost, hp, hp,
+                atk, dmg, ctr, traits, stealthed, "",
+            ])
+
+    for ri, row in enumerate(register_rows, 4):
+        band = ROW_FILL_A if (ri % 2 == 0) else ROW_FILL_B
+        for ci, val in enumerate(row, 1):
+            c = ws.cell(row=ri, column=ci, value=val)
+            c.font = BODY
+            c.alignment = LEFT_TOP
+            c.border = BORDER
+            c.fill = band
+
+    last_row = 3 + len(register_rows)
+    ref = f"A3:{get_column_letter(len(headers))}{last_row}"
+    tbl = Table(displayName="Register", ref=ref)
+    tbl.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2", showRowStripes=True)
+    ws.add_table(tbl)
+
+    widths = [5, 18, 28, 10, 26, 6, 8, 8, 12, 10, 10, 22, 12, 30]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Stealthed dropdown
+    dv_st = DataValidation(type="list", formula1='"Yes"', allow_blank=True)
+    ws.add_data_validation(dv_st)
+    for r in range(4, last_row + 1):
+        dv_st.add(ws.cell(row=r, column=13))
+
+    # Type dropdown
+    dv_type = DataValidation(
+        type="list", formula1='"Force,Cunning,Wealth,Magic"', allow_blank=True)
+    ws.add_data_validation(dv_type)
+    for r in range(4, last_row + 1):
+        dv_type.add(ws.cell(row=r, column=4))
+
+    # Location dropdown — pulls from the Locations table
+    dv_loc = DataValidation(
+        type="list", formula1="=Locations[Location]", allow_blank=True)
+    ws.add_data_validation(dv_loc)
+    for r in range(4, last_row + 1):
+        dv_loc.add(ws.cell(row=r, column=5))
+
+
+# ---------------------------------------------------------------------------
+# Locations Matrix — derived view: rows = locations, cols = factions
+# ---------------------------------------------------------------------------
+def build_locations_matrix(wb):
+    ws = wb.create_sheet("Locations Matrix")
+    ws.sheet_properties.tabColor = "8064A2"
+    span = 1 + N_FACTIONS
+    title_row(ws, 1, "Locations Matrix — who has what, where", span)
+
+    note = ("Cells auto-derive from the Asset Register via FILTER. "
+            "Change a unit's location in Asset Register and it moves here.")
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=span)
+    nc = ws.cell(row=2, column=1, value=note)
+    nc.font = ITAL
+    nc.alignment = LEFT_TOP
+
+    # Header row 4
+    c = ws.cell(row=4, column=1, value="Location")
+    c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    c.fill = SUB_FILL
+    c.alignment = CENTER
+    c.border = BORDER
+    for fi, f in enumerate(VEINS_FACTIONS):
+        c = ws.cell(row=4, column=2 + fi, value=f["name"])
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+        c.border = BORDER
+
+    for li, (loc, _note) in enumerate(LOCATIONS):
+        r = 5 + li
+        band = ROW_FILL_A if (li % 2 == 0) else ROW_FILL_B
+        c = ws.cell(row=r, column=1, value=loc)
+        c.font = H3
+        c.alignment = LEFT_TOP
+        c.border = BORDER
+        c.fill = band
+        for fi, f in enumerate(VEINS_FACTIONS):
+            formula = (
+                f'=TEXTJOIN(CHAR(10), TRUE, IFERROR('
+                f'FILTER(Register[Asset]&" ("&Register[CurHP]&"/"&Register[MaxHP]&")",'
+                f' (Register[Location]="{loc}")*(Register[Faction]="{f["name"]}"),'
+                f' ""), ""))')
+            cc = ws.cell(row=r, column=2 + fi, value=formula)
+            cc.font = BODY
+            cc.alignment = WRAP_TOP
+            cc.border = BORDER
+            cc.fill = band
+        ws.row_dimensions[r].height = 75
+
+    ws.column_dimensions["A"].width = 30
+    for fi in range(N_FACTIONS):
+        ws.column_dimensions[get_column_letter(2 + fi)].width = 22
+
+
+# ---------------------------------------------------------------------------
+# Action Sheet — turn × faction; one chosen action per row
+# ---------------------------------------------------------------------------
+def build_action_sheet(wb):
+    ws = wb.create_sheet("Action Sheet")
+    ws.sheet_properties.tabColor = "C0504D"
+    title_row(ws, 1, "Action Sheet — each faction's chosen action, turn by turn", 10)
+
+    note = (
+        "One row per (turn × faction). The Acting Asset and Asset to Create "
+        "dropdowns are filtered to that faction's possibilities (its current "
+        "assets / what it currently qualifies for and can afford). "
+        "Treasure Spent feeds the Turn Summary's bookkeeping."
+    )
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
+    nc = ws.cell(row=2, column=1, value=note)
+    nc.font = ITAL
+    nc.alignment = WRAP_TOP
+    ws.row_dimensions[2].height = 30
+
+    headers = [
+        "Turn", "Faction", "Treasure (start)",
+        "Action", "Acting Asset", "Asset to Create",
+        "Destination / Target Location", "Target Asset",
+        "Treasure Spent", "Notes",
+    ]
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+        c.border = BORDER
+
+    # Validations that don't depend on faction
+    dv_action = DataValidation(
+        type="list",
+        formula1='"' + ",".join(ACTION_OPTIONS) + '"',
+        allow_blank=True)
+    dv_loc = DataValidation(
+        type="list", formula1="=Locations[Location]", allow_blank=True)
+    dv_target = DataValidation(
+        type="list", formula1="=Register[Asset]", allow_blank=True)
+    ws.add_data_validation(dv_action)
+    ws.add_data_validation(dv_loc)
+    ws.add_data_validation(dv_target)
+
+    # Per-faction validations: one DV per faction for Acting Asset and Create
+    asset_dv_by_faction = {}
+    creat_dv_by_faction = {}
+    for f in VEINS_FACTIONS:
+        san = sanitize_name(f["name"])
+        dv_a = DataValidation(
+            type="list", formula1=f"=Assets_{san}", allow_blank=True)
+        dv_c = DataValidation(
+            type="list", formula1=f"=Creatable_{san}", allow_blank=True)
+        ws.add_data_validation(dv_a)
+        ws.add_data_validation(dv_c)
+        asset_dv_by_faction[f["name"]] = dv_a
+        creat_dv_by_faction[f["name"]] = dv_c
+
+    # Rows
+    row_idx = 4
+    for turn in range(1, TURNS + 1):
+        band = ROW_FILL_A if (turn % 2 == 0) else ROW_FILL_B
+        for fi, f in enumerate(VEINS_FACTIONS):
+            r = row_idx
+            fname = f["name"]
+            ws.cell(row=r, column=1, value=turn).alignment = CENTER
+            ws.cell(row=r, column=2, value=fname).font = H3
+            # Treasure (start) mirrors the Turn Summary's start cell for same row
+            # Turn Summary row offset: header row 4, data starts row 5 → row r-4+5 = r+1
+            ws.cell(row=r, column=3, value=f"='Turn Summary'!C{r + 1}")
+
+            # Wire validations
+            dv_action.add(ws.cell(row=r, column=4))
+            asset_dv_by_faction[fname].add(ws.cell(row=r, column=5))
+            creat_dv_by_faction[fname].add(ws.cell(row=r, column=6))
+            dv_loc.add(ws.cell(row=r, column=7))
+            dv_target.add(ws.cell(row=r, column=8))
+
+            # Banding + borders
+            for ci in range(1, len(headers) + 1):
+                cc = ws.cell(row=r, column=ci)
+                cc.border = BORDER
+                cc.fill = band
+                if cc.font.name is None:
+                    cc.font = BODY
+
+            row_idx += 1
+
+    widths = [6, 18, 14, 18, 24, 22, 26, 22, 12, 30]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Freeze first header / faction column
+    ws.freeze_panes = "C4"
+
+
+# ---------------------------------------------------------------------------
+# Turn Summary — derived ledger of treasure flow + auto-rolled combat
+# ---------------------------------------------------------------------------
+def build_turn_summary(wb):
+    ws = wb.create_sheet("Turn Summary")
+    ws.sheet_properties.tabColor = "C0504D"
+    title_row(ws, 1, "Turn Summary — treasure, upkeep, combat", 17)
+
+    notes = ("Auto-rolls use RANDBETWEEN, which re-rolls every time the sheet "
+             "recalculates (press F9). To LOCK a turn's combat result, "
+             "select the roll cells and Paste Special > Values over them.  "
+             "Income = CEILING(W/2 + F/4 + C/4).  "
+             "Upkeep = sum over types of MAX(0, count - rating).  "
+             "Treasure End = Start + Income - Upkeep - Spent.")
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=17)
+    nc = ws.cell(row=2, column=1, value=notes)
+    nc.font = ITAL
+    nc.alignment = WRAP_TOP
+    ws.row_dimensions[2].height = 50
+
+    headers = [
+        "Turn", "Faction",
+        "Treasure Start", "+Income", "-Upkeep", "-Spent",
+        "Treasure End",
+        "Action", "Acting Asset", "Target Asset",
+        "Atk d10", "Atk Total", "Def d10", "Def Total",
+        "Winner", "Damage", "Counter",
+    ]
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(row=4, column=ci, value=h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = SUB_FILL
+        c.alignment = CENTER
+        c.border = BORDER
+
+    n = N_FACTIONS
+    row_idx = 5
+    for turn in range(1, TURNS + 1):
+        band = ROW_FILL_A if (turn % 2 == 0) else ROW_FILL_B
+        for fi, f in enumerate(VEINS_FACTIONS):
+            r = row_idx
+            fname = f["name"]
+            # Action Sheet row for this (turn, faction)
+            action_r = 4 + (turn - 1) * n + fi
+
+            # 1 Turn / 2 Faction
+            ws.cell(row=r, column=1, value=turn).alignment = CENTER
+            ws.cell(row=r, column=2, value=fname).font = H3
+
+            # 3 Treasure Start
+            if turn == 1:
+                ws.cell(row=r, column=3,
+                        value=f'=XLOOKUP("{fname}",FactionState[Faction],FactionState[Treasure])')
+            else:
+                # Same-faction prior-turn end = G of (r - n)
+                ws.cell(row=r, column=3, value=f"=G{r - n}")
+
+            # 4 Income
+            ws.cell(row=r, column=4, value=(
+                f'=CEILING('
+                f'XLOOKUP("{fname}",FactionState[Faction],FactionState[Wealth])/2'
+                f'+XLOOKUP("{fname}",FactionState[Faction],FactionState[Force])/4'
+                f'+XLOOKUP("{fname}",FactionState[Faction],FactionState[Cunning])/4, 1)'))
+
+            # 5 Upkeep
+            ws.cell(row=r, column=5, value=(
+                f'=MAX(0,COUNTIFS(Register[Faction],"{fname}",Register[Type],"Force")'
+                f'-XLOOKUP("{fname}",FactionState[Faction],FactionState[Force]))'
+                f'+MAX(0,COUNTIFS(Register[Faction],"{fname}",Register[Type],"Cunning")'
+                f'-XLOOKUP("{fname}",FactionState[Faction],FactionState[Cunning]))'
+                f'+MAX(0,COUNTIFS(Register[Faction],"{fname}",Register[Type],"Wealth")'
+                f'-XLOOKUP("{fname}",FactionState[Faction],FactionState[Wealth]))'
+                f'+MAX(0,COUNTIFS(Register[Faction],"{fname}",Register[Type],"Magic")'
+                f'-XLOOKUP("{fname}",FactionState[Faction],FactionState[Magic]))'))
+
+            # 6 Spent (from Action Sheet column I)
+            ws.cell(row=r, column=6,
+                    value=f"=IFERROR(VALUE('Action Sheet'!I{action_r}),0)")
+
+            # 7 Treasure End
+            ws.cell(row=r, column=7, value=f"=C{r}+D{r}-E{r}-F{r}")
+
+            # 8 Action / 9 Acting Asset / 10 Target Asset
+            ws.cell(row=r, column=8, value=f"='Action Sheet'!D{action_r}")
+            ws.cell(row=r, column=9, value=f"='Action Sheet'!E{action_r}")
+            ws.cell(row=r, column=10, value=f"='Action Sheet'!H{action_r}")
+
+            # 11 Atk d10
+            ws.cell(row=r, column=11,
+                    value=f'=IF(H{r}="Attack",RANDBETWEEN(1,10),"")')
+
+            # 12 Atk Total = d10 + attacker's relevant attribute rating
+            ws.cell(row=r, column=12, value=(
+                f'=IF(H{r}="Attack", K{r}+IFERROR(SWITCH('
+                f'XLOOKUP(I{r},Catalog[Name],Catalog[AtkAttr]),'
+                f'"Force",XLOOKUP("{fname}",FactionState[Faction],FactionState[Force]),'
+                f'"Cunning",XLOOKUP("{fname}",FactionState[Faction],FactionState[Cunning]),'
+                f'"Wealth",XLOOKUP("{fname}",FactionState[Faction],FactionState[Wealth]),'
+                f'"Magic",XLOOKUP("{fname}",FactionState[Faction],FactionState[Magic]),0),0),"")'))
+
+            # 13 Def d10
+            ws.cell(row=r, column=13,
+                    value=f'=IF(H{r}="Attack",RANDBETWEEN(1,10),"")')
+
+            # 14 Def Total = d10 + defender's relevant attr rating
+            # Defender faction = the faction owning the Target Asset (lookup in Register)
+            ws.cell(row=r, column=14, value=(
+                f'=IF(H{r}="Attack", M{r}+IFERROR(LET('
+                f'def_fac, XLOOKUP(J{r},Register[Asset],Register[Faction]),'
+                f'def_attr, XLOOKUP(I{r},Catalog[Name],Catalog[DefAttr]),'
+                f'SWITCH(def_attr,'
+                f'"Force",XLOOKUP(def_fac,FactionState[Faction],FactionState[Force]),'
+                f'"Cunning",XLOOKUP(def_fac,FactionState[Faction],FactionState[Cunning]),'
+                f'"Wealth",XLOOKUP(def_fac,FactionState[Faction],FactionState[Wealth]),'
+                f'"Magic",XLOOKUP(def_fac,FactionState[Faction],FactionState[Magic]),0)),0),"")'))
+
+            # 15 Winner — ties go to defender per WWN
+            ws.cell(row=r, column=15, value=(
+                f'=IF(H{r}<>"Attack","",'
+                f'IF(AND(ISNUMBER(L{r}),ISNUMBER(N{r})),'
+                f'IF(L{r}>N{r},"Attacker","Defender"),""))'))
+
+            # 16 Damage = attacker's damage dice, rolled
+            ws.cell(row=r, column=16, value=(
+                f'=IF(O{r}="Attacker",IFERROR(LET('
+                f'nn,XLOOKUP(I{r},Catalog[Name],Catalog[DmgN]),'
+                f'dd,XLOOKUP(I{r},Catalog[Name],Catalog[DmgDie]),'
+                f'IF(dd=0,0,RANDBETWEEN(1,dd)+IF(nn>=2,RANDBETWEEN(1,dd),0))),0),"")'))
+
+            # 17 Counter = defender's counter dice, rolled
+            ws.cell(row=r, column=17, value=(
+                f'=IF(O{r}="Defender",IFERROR(LET('
+                f'nn,XLOOKUP(J{r},Catalog[Name],Catalog[CtrN]),'
+                f'dd,XLOOKUP(J{r},Catalog[Name],Catalog[CtrDie]),'
+                f'IF(dd=0,0,RANDBETWEEN(1,dd)+IF(nn>=2,RANDBETWEEN(1,dd),0))),0),"")'))
+
+            # Banding + borders
+            for ci in range(1, len(headers) + 1):
+                cc = ws.cell(row=r, column=ci)
+                cc.border = BORDER
+                cc.fill = band
+                if cc.font.name is None:
+                    cc.font = BODY
+
+            row_idx += 1
+
+    widths = [5, 18, 11, 9, 10, 9, 12, 16, 24, 22, 8, 9, 8, 9, 11, 8, 8]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws.freeze_panes = "C5"
+
+
 def main():
     wb = Workbook()
     build_readme(wb)
@@ -1079,6 +1735,11 @@ def main():
     for f in VEINS_FACTIONS:
         build_faction_sheet(wb, f)
     build_blank_faction(wb)
+    build_lookups(wb)
+    build_asset_register(wb)
+    build_locations_matrix(wb)
+    build_action_sheet(wb)
+    build_turn_summary(wb)
     out = "WWN_Veins_of_the_Earth_Factions.xlsx"
     wb.save(out)
     print("wrote", out)
