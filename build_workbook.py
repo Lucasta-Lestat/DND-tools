@@ -7,6 +7,8 @@ Out:   WWN_Veins_of_the_Earth_Factions.xlsx
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
@@ -529,6 +531,23 @@ COMBAT_FIELDS = [
 ]
 
 
+# ----- canonical campaign locations -----
+# (Name, Note). Order is the order they appear in the Locations Matrix.
+LOCATIONS = [
+    ("Celephais", "Aelf-Adal capital — the dream-city."),
+    ("Nox", "Great shared city; most factions keep a presence here."),
+    ("Isles of the Imprisoned Moon", "Unclaimed / contested — dErO and Olm both press here."),
+    ("Comorragh", "Fractal War-Mine of the Dvargir."),
+    ("Piranesi", "Largest Deep Janeen palace."),
+    ("Fever City Underground", "Held by the Cholerids (NPC faction — no faction sheet)."),
+    ("Genet", "A Funginid core."),
+    ("Gordiam", "Knotsmen capital."),
+    ("The Core", "Substratal heartland."),
+    ("Heliotropolis", "Gnonmen lantern-city."),
+]
+LOCATION_NAMES = [name for name, _ in LOCATIONS]
+
+
 # ---------------------------------------------------------------------------
 # Veins-of-the-Earth factions (prefilled)
 # ---------------------------------------------------------------------------
@@ -548,16 +567,16 @@ VEINS_FACTIONS = [
         "force": 2, "cunning": 4, "wealth": 4, "magic": 2,
         "treasure": 8,
         "tags": ["Demon-Pacted (homebrew)", "Tyrannical", "Subterranean (homebrew, Veins-of-the-Earth)"],
-        "hq": "The Compounding Vaults",
+        "hq": "Gordiam",
         "goal": "Wealth of Worlds — accumulate 30+ banked Treasure through usury and pacts.",
         "assets": [
-            ("Bonded Service", "Wealth", "Mid-Veins markets"),
-            ("Usurers",        "Wealth", "Compounding Vaults"),
-            ("Pact-Vaults",    "Wealth", "Compounding Vaults"),
-            ("Debt-Collectors","Cunning","Surface debtor towns"),
-            ("Demonic Notary", "Magic",  "Hall of Contracts"),
-            ("Mercenaries",    "Force",  "Compounding Vaults"),
-            ("Saboteurs",      "Cunning","Rival faction debt-houses"),
+            ("Bonded Service", "Wealth", "Nox"),
+            ("Usurers",        "Wealth", "Gordiam"),
+            ("Pact-Vaults",    "Wealth", "Gordiam"),
+            ("Debt-Collectors","Cunning","Nox"),
+            ("Demonic Notary", "Magic",  "Gordiam"),
+            ("Mercenaries",    "Force",  "Gordiam"),
+            ("Saboteurs",      "Cunning","Comorragh"),
         ],
     },
     {
@@ -572,16 +591,16 @@ VEINS_FACTIONS = [
         "force": 3, "cunning": 5, "wealth": 2, "magic": 4,
         "treasure": 6,
         "tags": ["Dream-Born (homebrew)", "Secretive", "Cult of Personality"],
-        "hq": "The Hall of Mirroring Dreams",
+        "hq": "Celephais",
         "goal": "Internal Subversion — reduce a surface faction's Cunning by 2 via Subtle play.",
         "assets": [
-            ("Dream-Walkers",  "Cunning","Multiple surface courts"),
-            ("Assassins",      "Cunning","Mirror Halls"),
-            ("Cult Network",   "Cunning","Veins waystations"),
-            ("Witch Coven",    "Magic",  "Mirror Halls"),
-            ("Adept Order",    "Magic",  "Mirror Halls"),
-            ("Dream-Knights of the Black Glass Court", "Force", "Black Glass Court"),
-            ("Dream Anchor",   "Magic",  "Sleeping Sanctum"),
+            ("Dream-Walkers",  "Cunning","Nox"),
+            ("Assassins",      "Cunning","Celephais"),
+            ("Cult Network",   "Cunning","Nox"),
+            ("Witch Coven",    "Magic",  "Celephais"),
+            ("Adept Order",    "Magic",  "Celephais"),
+            ("Dream-Knights of the Black Glass Court", "Force", "Celephais"),
+            ("Dream Anchor",   "Magic",  "Celephais"),
         ],
     },
     {
@@ -595,15 +614,15 @@ VEINS_FACTIONS = [
         "force": 2, "cunning": 4, "wealth": 1, "magic": 3,
         "treasure": 3,
         "tags": ["Hive-Mind (homebrew)", "Secretive", "Subterranean (homebrew, Veins-of-the-Earth)"],
-        "hq": "The Spore-Cathedral",
+        "hq": "Genet",
         "goal": "Religious Conversion — convert 3 rival assets via spore-cult infiltration.",
         "assets": [
-            ("Cult Network",        "Cunning","Slave-pens across the Veins"),
-            ("Spore-Wreaths",       "Cunning","Every slave market"),
-            ("Spore-Maddened Slaves","Force", "Cattle-races' larders"),
-            ("Spore-Cathedral Choir","Magic", "Spore-Cathedral"),
-            ("Death Cult",          "Magic",  "Carrion grounds"),
-            ("Hedge Mages",         "Magic",  "Spore-Cathedral"),
+            ("Cult Network",        "Cunning","Nox"),
+            ("Spore-Wreaths",       "Cunning","Nox"),
+            ("Spore-Maddened Slaves","Force", "Genet"),
+            ("Spore-Cathedral Choir","Magic", "Genet"),
+            ("Death Cult",          "Magic",  "Genet"),
+            ("Hedge Mages",         "Magic",  "Genet"),
         ],
     },
     {
@@ -617,16 +636,16 @@ VEINS_FACTIONS = [
         "force": 3, "cunning": 4, "wealth": 2, "magic": 3,
         "treasure": 4,
         "tags": ["Innovative", "Mage-Killers", "Secretive"],
-        "hq": "The Buzzing Halls",
+        "hq": "No fixed capital — cells across the Veins",
         "goal": "Tech / Magic Expansion — reach Magic 4 by stealing crystal lore.",
         "assets": [
-            ("Eyes Everywhere","Cunning","Buzzing Halls"),
-            ("Crystal Mines",  "Wealth", "Crystal Pylons"),
-            ("Crystal Lancers","Force",  "Crystal Pylons"),
-            ("Bribed Officials","Cunning","Surface intelligence services"),
-            ("Demonologists",  "Magic",  "Lower Buzzing Halls"),
-            ("Magic Workshop", "Magic",  "Buzzing Halls"),
-            ("Whisper Network","Cunning","Across the Veins"),
+            ("Eyes Everywhere","Cunning","Nox"),
+            ("Crystal Mines",  "Wealth", "Isles of the Imprisoned Moon"),
+            ("Crystal Lancers","Force",  "Isles of the Imprisoned Moon"),
+            ("Bribed Officials","Cunning","Nox"),
+            ("Demonologists",  "Magic",  "Isles of the Imprisoned Moon"),
+            ("Magic Workshop", "Magic",  "Isles of the Imprisoned Moon"),
+            ("Whisper Network","Cunning","Nox"),
         ],
     },
     {
@@ -640,16 +659,16 @@ VEINS_FACTIONS = [
         "force": 5, "cunning": 2, "wealth": 4, "magic": 1,
         "treasure": 7,
         "tags": ["Industrious", "Eugenic Cult", "Tyrannical"],
-        "hq": "Forgeholds of Anvil-Below",
+        "hq": "Comorragh",
         "goal": "Commercial Expansion — 8 Treasure of surplus income via forgework.",
         "assets": [
-            ("Heavy Infantry", "Force",  "Forgeholds"),
-            ("Workshops",      "Wealth", "Forgeholds"),
-            ("Smiths",         "Wealth", "Forgeholds"),
-            ("Slavers",        "Wealth", "Caravan routes"),
-            ("Armoury",        "Force",  "Forgeholds"),
-            ("Citadel",        "Force",  "Anvil-Below"),
-            ("Tax Collectors", "Wealth", "Vassal warrens"),
+            ("Heavy Infantry", "Force",  "Comorragh"),
+            ("Workshops",      "Wealth", "Comorragh"),
+            ("Smiths",         "Wealth", "Comorragh"),
+            ("Slavers",        "Wealth", "Nox"),
+            ("Armoury",        "Force",  "Comorragh"),
+            ("Citadel",        "Force",  "Comorragh"),
+            ("Tax Collectors", "Wealth", "Nox"),
         ],
     },
     {
@@ -663,16 +682,16 @@ VEINS_FACTIONS = [
         "force": 3, "cunning": 3, "wealth": 2, "magic": 2,
         "treasure": 4,
         "tags": ["Concordat", "Xenophiles", "Subterranean (homebrew, Veins-of-the-Earth)"],
-        "hq": "The Lantern Holds",
+        "hq": "Heliotropolis",
         "goal": "Peaceable Kingdom — survive 3 turns without losing an asset.",
         "assets": [
-            ("Lantern Wardens",     "Force",  "Lantern Holds"),
-            ("Tunnel Crawlers",     "Force",  "Veins patrol routes"),
-            ("Spirit Walkers",      "Magic",  "Lantern Holds"),
-            ("Mushroom Fields",     "Wealth", "Surface of the Lantern Holds"),
-            ("Hearth-Lantern Shrine","Magic", "Lantern Holds"),
-            ("Lightless Cartographers","Cunning","Across Gnonmen friend-networks"),
-            ("Border Fort",         "Force",  "Upper passes"),
+            ("Lantern Wardens",     "Force",  "Heliotropolis"),
+            ("Tunnel Crawlers",     "Force",  "Nox"),
+            ("Spirit Walkers",      "Magic",  "Heliotropolis"),
+            ("Mushroom Fields",     "Wealth", "Heliotropolis"),
+            ("Hearth-Lantern Shrine","Magic", "Heliotropolis"),
+            ("Lightless Cartographers","Cunning","Nox"),
+            ("Border Fort",         "Force",  "Heliotropolis"),
         ],
     },
     {
@@ -686,15 +705,15 @@ VEINS_FACTIONS = [
         "force": 6, "cunning": 1, "wealth": 1, "magic": 5,
         "treasure": 3,
         "tags": ["Antimagical", "Subterranean (homebrew, Veins-of-the-Earth)", "Fanatic"],
-        "hq": "The Sunken Heart",
+        "hq": "The Core",
         "goal": "Invincible Valor — defeat an asset of twice the attacker's Cost.",
         "assets": [
-            ("Stone-Voice Oracle",      "Magic",  "Sunken Heart"),
-            ("Stone-Eaters",            "Force",  "Sunken Heart"),
-            ("Substratal Tribute Stones","Wealth","Veins frontier"),
-            ("Citadel",                 "Force",  "Stone-fields"),
-            ("Ritual Casters",          "Magic",  "Sunken Heart"),
-            ("Bound Spirit",            "Magic",  "Substratal frontier"),
+            ("Stone-Voice Oracle",      "Magic",  "The Core"),
+            ("Stone-Eaters",            "Force",  "The Core"),
+            ("Substratal Tribute Stones","Wealth","The Core"),
+            ("Citadel",                 "Force",  "The Core"),
+            ("Ritual Casters",          "Magic",  "The Core"),
+            ("Bound Spirit",            "Magic",  "Comorragh"),
         ],
     },
     {
@@ -708,15 +727,15 @@ VEINS_FACTIONS = [
         "force": 4, "cunning": 4, "wealth": 5, "magic": 6,
         "treasure": 10,
         "tags": ["Cult of Personality", "Innovative", "Mercantile"],
-        "hq": "Each in their own maze",
+        "hq": "Piranesi",
         "goal": "Wealth of Worlds — Wealth 8 or 30+ Treasure stockpiled.",
         "assets": [
-            ("Wonderworker",         "Magic",  "Their personal maze"),
-            ("Adept Order",          "Magic",  "Janeen courts"),
-            ("Maze-Toll",            "Wealth", "Each maze entrance"),
-            ("Counting House",       "Wealth", "Janeen courts"),
-            ("Janeen Aesthete-Spies","Cunning","Surface and underdark salons"),
-            ("Bound Spirit",         "Magic",  "Janeen frontier"),
+            ("Wonderworker",         "Magic",  "Piranesi"),
+            ("Adept Order",          "Magic",  "Piranesi"),
+            ("Maze-Toll",            "Wealth", "Piranesi"),
+            ("Counting House",       "Wealth", "Nox"),
+            ("Janeen Aesthete-Spies","Cunning","Nox"),
+            ("Bound Spirit",         "Magic",  "Piranesi"),
         ],
     },
     {
@@ -730,15 +749,15 @@ VEINS_FACTIONS = [
         "force": 3, "cunning": 3, "wealth": 1, "magic": 2,
         "treasure": 3,
         "tags": ["Savage", "Subterranean (homebrew, Veins-of-the-Earth)", "Scavengers"],
-        "hq": "The Drowned Galleries",
+        "hq": "No fixed capital — wanders the drowned routes",
         "goal": "Veins-Walker — establish permanent caravan path between two distant Veins.",
         "assets": [
-            ("Brigands",        "Force",  "Drowned Galleries"),
-            ("Smugglers",       "Cunning","Underwater Vein routes"),
-            ("Olm Listeners",   "Cunning","Drowned Galleries"),
-            ("Hidden Larder",   "Wealth", "Concealed gallery niches"),
-            ("Olm Anatomist",   "Magic",  "Drowned Galleries"),
-            ("Spirit Walkers",  "Magic",  "Deep pools"),
+            ("Brigands",        "Force",  "Isles of the Imprisoned Moon"),
+            ("Smugglers",       "Cunning","Nox"),
+            ("Olm Listeners",   "Cunning","Isles of the Imprisoned Moon"),
+            ("Hidden Larder",   "Wealth", "Isles of the Imprisoned Moon"),
+            ("Olm Anatomist",   "Magic",  "Isles of the Imprisoned Moon"),
+            ("Spirit Walkers",  "Magic",  "Nox"),
         ],
     },
 ]
