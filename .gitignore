@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.d100_cache/
+EMO_d100_tables.xlsx

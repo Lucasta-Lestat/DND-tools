@@ -44,10 +44,27 @@ A fillable character sheet with four house rules baked into the formulas.
 
 Sheets: README, Character, Inventory, Combat & Spells, Features & Notes.
 
+### 3. Elf Maids and Octopi — d100 Tables Scraper
+
+Pulls every post tagged `d100` from
+[Elf Maids and Octopi](https://elfmaidsandoctopi.blogspot.com) via the Blogger
+JSON feed and writes them into a single workbook, one sheet per table.
+
+| File | What it is |
+| --- | --- |
+| `scrape_d100_tables.py` | Scraper + Excel writer. |
+| `EMO_d100_tables.xlsx` | Output (generated; not checked in). |
+
+Each sheet has a `#` / `Entry` table parsed from the post's `<ol>` lists, with
+a regex fallback for posts that use plain numbered lines. Posts that can't be
+parsed are still included with their raw text so nothing is lost. An `Index`
+sheet links back to every post URL.
+
 ## Regenerating
 
 ```sh
-pip install openpyxl
+pip install openpyxl requests beautifulsoup4
 python3 build_workbook.py            # faction workbook
 python3 build_character_sheet.py     # character sheet
+python3 scrape_d100_tables.py        # EMO d100 tables (writes EMO_d100_tables.xlsx)
 ```
