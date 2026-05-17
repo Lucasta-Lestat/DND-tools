@@ -60,11 +60,30 @@ a regex fallback for posts that use plain numbered lines. Posts that can't be
 parsed are still included with their raw text so nothing is lost. An `Index`
 sheet links back to every post URL.
 
+### 4. Coins and Scrolls — Tables Scraper
+
+Pulls posts from [Coins and Scrolls](https://coinsandscrolls.blogspot.com)
+via the Blogger JSON feed and writes one sheet per `<table>` found, with the
+section subheaders Skerples interleaves between batches preserved as bold
+rows merged across the table width. Both d100-style and 2-column lookup
+tables (e.g. saint-name → domain) are supported. Falls back to numbered-line
+regex parsing for posts that don't use `<table>` markup.
+
+| File | What it is |
+| --- | --- |
+| `scrape_coinsandscrolls_tables.py` | Scraper + Excel writer. |
+| `CoinsAndScrolls_tables.xlsx` | Output (generated; not checked in). |
+
+Useful flags: `--label <tag>` to filter (default: all posts), `--d100-only`
+to skip lookup tables, `--min-rows N` to drop layout tables, `--limit N` for
+a quick smoke test.
+
 ## Regenerating
 
 ```sh
 pip install openpyxl requests beautifulsoup4
-python3 build_workbook.py            # faction workbook
-python3 build_character_sheet.py     # character sheet
-python3 scrape_d100_tables.py        # EMO d100 tables (writes EMO_d100_tables.xlsx)
+python3 build_workbook.py                       # faction workbook
+python3 build_character_sheet.py                # character sheet
+python3 scrape_d100_tables.py                   # EMO d100 tables
+python3 scrape_coinsandscrolls_tables.py        # Skerples tables
 ```

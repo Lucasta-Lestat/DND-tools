@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 .d100_cache/
+.coinsandscrolls_cache/
 EMO_d100_tables.xlsx
+CoinsAndScrolls_tables.xlsx
