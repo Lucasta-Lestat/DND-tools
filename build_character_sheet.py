@@ -14,7 +14,18 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
+
+
+def add_table_safely(ws, tbl, headers):
+    """openpyxl's auto-generated tableColumns use worksheet column indexes as
+    IDs, which produces OOXML-invalid tables when the table doesn't start at
+    column A. Pre-populate the columns with sequential 1-based IDs to keep
+    Excel happy with structured references against the table."""
+    if not tbl.tableColumns:
+        for i, h in enumerate(headers, 1):
+            tbl.tableColumns.append(TableColumn(id=i, name=h))
+    ws.add_table(tbl)
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +827,7 @@ def build_classref(wb):
     cdb_table = Table(displayName="ClassDB", ref=cdb_ref)
     cdb_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight15", showRowStripes=True)
-    ws.add_table(cdb_table)
+    add_table_safely(ws, cdb_table, cdb_headers)
 
     # ---- SlotTable at F1 (Class, Lvl, Slots1..Slots9) ----
     st_start = 6  # F
@@ -844,7 +855,7 @@ def build_classref(wb):
     st_table = Table(displayName="SlotTable", ref=st_ref)
     st_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight10", showRowStripes=True)
-    ws.add_table(st_table)
+    add_table_safely(ws, st_table, st_headers)
 
     for col in range(1, st_start + len(st_headers)):
         ws.column_dimensions[get_column_letter(col)].width = 11

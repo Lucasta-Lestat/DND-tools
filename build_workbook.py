@@ -9,7 +9,18 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
+
+
+def add_table_safely(ws, tbl, headers):
+    """openpyxl's auto-generated tableColumns use worksheet column indexes as
+    IDs, which produces OOXML-invalid tables when the table doesn't start at
+    column A. Pre-populate the columns with sequential 1-based IDs to keep
+    Excel happy with structured references against the table."""
+    if not tbl.tableColumns:
+        for i, h in enumerate(headers, 1):
+            tbl.tableColumns.append(TableColumn(id=i, name=h))
+    ws.add_table(tbl)
 
 
 # ---------------------------------------------------------------------------
@@ -1216,7 +1227,7 @@ def build_lookups(wb):
     cat_table = Table(displayName="Catalog", ref=cat_ref)
     cat_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight15", showRowStripes=True)
-    ws.add_table(cat_table)
+    add_table_safely(ws, cat_table, cat_headers)
 
     # ---- FactionState table at column W (col 23) ----
     fs_start = 23
@@ -1243,7 +1254,7 @@ def build_lookups(wb):
     fs_table = Table(displayName="FactionState", ref=fs_ref)
     fs_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight10", showRowStripes=True)
-    ws.add_table(fs_table)
+    add_table_safely(ws, fs_table, fs_headers)
 
     # ---- Locations table at column AE (col 31) ----
     loc_start = 31
@@ -1262,7 +1273,7 @@ def build_lookups(wb):
     loc_table = Table(displayName="Locations", ref=loc_ref)
     loc_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight12", showRowStripes=True)
-    ws.add_table(loc_table)
+    add_table_safely(ws, loc_table, ["Location", "Note"])
 
     # ---- Per-faction spills (current assets and creatable assets) ----
     asset_spill_start = 34   # AH
@@ -1389,7 +1400,7 @@ def build_asset_register(wb):
     tbl = Table(displayName="Register", ref=ref)
     tbl.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2", showRowStripes=True)
-    ws.add_table(tbl)
+    add_table_safely(ws, tbl, headers)
 
     widths = [5, 18, 28, 10, 26, 6, 8, 8, 12, 10, 10, 22, 12, 30]
     for i, w in enumerate(widths, 1):
