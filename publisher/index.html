@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aperture Publisher</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header id="menubar">
+    <div class="brand"><span class="logo">◆</span> Aperture <em>Publisher</em></div>
+
+    <!-- StudioLink persona switcher -->
+    <nav id="personas" class="personas" aria-label="StudioLink personas"></nav>
+
+    <div class="menu-actions">
+      <button data-action="new" title="New document">New</button>
+      <button data-action="open" title="Open project (.apub)">Open</button>
+      <button data-action="save" title="Save project (.apub)">Save</button>
+      <span class="sep"></span>
+      <button data-action="undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button data-action="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+      <span class="sep"></span>
+      <button data-action="export-png" title="Export current spread as PNG">PNG</button>
+      <button data-action="export-svg" title="Export current spread as SVG">SVG</button>
+      <button data-action="export-pdf" title="Print / Save as PDF">PDF</button>
+    </div>
+  </header>
+
+  <div id="app">
+    <!-- Left: tool strip -->
+    <aside id="toolstrip" aria-label="Tools"></aside>
+
+    <!-- Center: rulers + canvas -->
+    <main id="stage">
+      <div id="contextbar" class="contextbar"></div>
+      <div id="canvas-wrap">
+        <canvas id="ruler-top" class="ruler ruler-top"></canvas>
+        <canvas id="ruler-left" class="ruler ruler-left"></canvas>
+        <div class="ruler-corner"></div>
+        <canvas id="scene"></canvas>
+        <textarea id="text-editor" spellcheck="false"></textarea>
+      </div>
+      <div id="statusbar" class="statusbar"></div>
+    </main>
+
+    <!-- Right: studio panels -->
+    <aside id="studio" aria-label="Studio panels"></aside>
+  </div>
+
+  <input type="file" id="file-open" accept=".apub,application/json" hidden />
+  <input type="file" id="file-image" accept="image/*" hidden />
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

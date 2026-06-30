@@ -44,6 +44,19 @@ A fillable character sheet with four house rules baked into the formulas.
 
 Sheets: README, Character, Inventory, Combat & Spells, Features & Notes.
 
+### 3. Aperture Publisher (desktop publishing app)
+
+A standalone, browser-based desktop-publishing app that replicates the core of
+Affinity Publisher — including **StudioLink** persona switching, master pages,
+paragraph styles, and linked text flow — intended for laying out a homebrew RPG
+rulebook. It does not depend on the spreadsheets above.
+
+| Path | What it is |
+| --- | --- |
+| `publisher/` | The app (open `publisher/index.html` via a static server). |
+
+See [`publisher/README.md`](publisher/README.md) for features and how to run it.
+
 ## Regenerating
 
 ```sh
