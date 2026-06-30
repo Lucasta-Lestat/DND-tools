@@ -2,11 +2,13 @@
 // thread text frames, edit text, and zoom/pan.
 import { store, begin, commit, emit, spreadObjects, getSpreads } from './store.js';
 import { TOOLS } from './personas.js';
-import { baseText, makeShape, makeImage, makeTable } from './model.js';
+import { baseText, makeShape, makeImage, makeTable, makeToc } from './model.js';
+import { collectHeadings } from './textlayout.js';
 import {
   screenToDoc, getPlacements, placementForPage, objectScreenCorners,
   hitTest, findOnSpread, drawScene, getView, fitView,
   computeTableLayout, tableCellAt, tableContentHeight,
+  tocEntryAt, tocContentHeight,
 } from './renderer.js';
 
 const scene = document.getElementById('scene');
@@ -123,9 +125,10 @@ function onPointerDown(e) {
     if (tool.create === 'text') obj = baseText(layerId);
     else if (tool.create === 'image') obj = makeImage(layerId, null, 0, 0);
     else if (tool.create === 'table') obj = makeTable(layerId);
+    else if (tool.create === 'toc') obj = makeToc(layerId);
     else obj = makeShape(tool.create, layerId, defaultFill(tool.create));
     obj.x = loc.x; obj.y = loc.y;
-    if (tool.create !== 'table') { obj.w = 1; obj.h = 1; }
+    if (tool.create !== 'table' && tool.create !== 'toc') { obj.w = 1; obj.h = 1; }
     pl.page.objects.push(obj);
     store.ui.selection = [obj.id];
     drag = { mode: 'create', obj, pl, origin: loc, tool: tool.create };
@@ -203,6 +206,8 @@ function onPointerDrag(e) {
     if (e.shiftKey && drag.tool !== 'line') { const s = Math.max(w, h); w = s; h = s; }
     if (drag.tool === 'table') { // height is content-driven
       o.x = Math.min(loc.x, drag.origin.x); o.y = drag.origin.y; o.w = Math.max(w, 60); o.h = tableContentHeight(o);
+    } else if (drag.tool === 'toc') {
+      o.x = Math.min(loc.x, drag.origin.x); o.y = drag.origin.y; o.w = Math.max(w, 120); o.h = Math.max(h, 40);
     } else { o.x = x; o.y = y; o.w = Math.max(w, 1); o.h = Math.max(h, 1); }
     drawScene();
     return;
@@ -230,6 +235,9 @@ function onPointerUp(e) {
     if (drag.tool === 'table') {
       if (o.w < 40) o.w = 240;
       o.h = tableContentHeight(o);
+    } else if (drag.tool === 'toc') {
+      if (o.w < 120) o.w = 360;
+      regenerateToc(o); // fills entries and fits height
     } else if (o.w < 4 && o.h < 4) { // click without drag -> default size
       if (drag.tool === 'text') { o.w = 200; o.h = 80; }
       else if (drag.tool === 'line') { o.w = 120; o.h = 0.5; }
@@ -388,27 +396,38 @@ function createCrossRef(srcId, dstId) {
   commit('cross-reference');
 }
 
+// Jump the editor to a 1-based page number (and optionally select an object).
+export function goToPageNumber(n, selectId) {
+  const pageIndex = n - 1;
+  if (pageIndex < 0 || pageIndex >= store.doc.pages.length) return;
+  if (store.ui.masterEdit) store.ui.masterEdit = null;
+  const page = store.doc.pages[pageIndex];
+  const idx = getSpreads().findIndex((sp) => sp.pages.includes(page));
+  if (idx >= 0) store.ui.spreadIndex = idx;
+  store.ui.selection = selectId ? [selectId] : [];
+  fitView();
+  emit();
+}
+
 // Navigate the editor to an object's link target.
 export function followLink(obj) {
   const link = obj.link;
   if (!link) return;
   if (link.type === 'url') { window.open(link.target, '_blank', 'noopener'); return; }
-  let pageIndex = -1, targetId = null;
   if (link.type === 'anchor') {
     const t = allObjects().find((o) => o.anchorName === link.target && store.doc.pages.some((p) => p.objects.includes(o)));
-    if (t) { targetId = t.id; pageIndex = store.doc.pages.findIndex((p) => p.objects.includes(t)); }
+    if (t) goToPageNumber(store.doc.pages.findIndex((p) => p.objects.includes(t)) + 1, t.id);
   } else if (link.type === 'page') {
-    pageIndex = (parseInt(link.target, 10) || 1) - 1;
+    goToPageNumber(parseInt(link.target, 10) || 1);
   }
-  if (pageIndex < 0 || pageIndex >= store.doc.pages.length) return;
-  if (store.ui.masterEdit) store.ui.masterEdit = null;
-  const page = store.doc.pages[pageIndex];
-  const spreads = getSpreads();
-  const idx = spreads.findIndex((sp) => sp.pages.includes(page));
-  if (idx >= 0) store.ui.spreadIndex = idx;
-  store.ui.selection = targetId ? [targetId] : [];
-  fitView();
-  emit();
+}
+
+// (Re)build a table of contents by scanning headings and fitting its height.
+export function regenerateToc(obj) {
+  const levels = obj.levels && obj.levels.length ? obj.levels : [1, 2, 3];
+  const heads = collectHeadings(store.doc);
+  obj.entries = heads.filter((h) => levels.includes(h.level)).map((h) => ({ text: h.text, level: h.level, page: h.page }));
+  obj.h = tocContentHeight(obj);
 }
 
 /* ---------- text editing ---------- */
@@ -525,6 +544,10 @@ function onDblClick(e) {
     const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
     const cell = tableCellAt(hit.obj, local.x, local.y);
     if (cell) startCellEdit(hit.obj, hit.pl, cell);
+  } else if (hit.obj.type === 'toc') {
+    const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+    const ent = tocEntryAt(hit.obj, local.x, local.y);
+    if (ent) goToPageNumber(ent.entry.page);
   } else if (hit.obj.type === 'image') document.getElementById('file-image').click();
 }
 

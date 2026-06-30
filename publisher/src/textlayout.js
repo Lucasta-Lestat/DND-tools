@@ -35,16 +35,16 @@ export function frameBaseStyle(frame, doc) {
 }
 
 function resolveParagraph(rawLine, base, doc) {
-  let text = rawLine, name = null;
-  if (rawLine.startsWith('### ')) { name = 'Heading 2'; text = rawLine.slice(4); }
-  else if (rawLine.startsWith('## ')) { name = 'Heading 2'; text = rawLine.slice(3); }
-  else if (rawLine.startsWith('# ')) { name = 'Heading 1'; text = rawLine.slice(2); }
+  let text = rawLine, name = null, level = 0;
+  if (rawLine.startsWith('### ')) { name = 'Heading 2'; text = rawLine.slice(4); level = 3; }
+  else if (rawLine.startsWith('## ')) { name = 'Heading 2'; text = rawLine.slice(3); level = 2; }
+  else if (rawLine.startsWith('# ')) { name = 'Heading 1'; text = rawLine.slice(2); level = 1; }
   let style = base;
   if (name) {
     const ps = doc.paragraphStyles.find((p) => p.name === name);
     if (ps) style = ps;
   }
-  return { text, style };
+  return { text, style, level };
 }
 
 // Map every named anchor to the page number it lives on (real pages only).
@@ -176,14 +176,18 @@ export function layoutStory(chain, doc) {
           continue;
         }
 
+        const isParaStart = wIndex === 0;
         const line = buildLine(words, wIndex, style, col.w);
         if (cursorY + lineH > col.y + col.h) break; // column full
         const tokens = positionLine(line, style, col.w, line.endsParagraph);
         const baseline = cursorY + style.size * 0.82;
-        lines.push({
+        const placed = {
           tokens, baseline, x: col.x, font: fontString(style),
           color: style.color, tracking: style.tracking || 0,
-        });
+        };
+        // Tag the first line of a heading paragraph so the TOC can find it.
+        if (isParaStart && para.level) placed.heading = { level: para.level, text: para.text };
+        lines.push(placed);
         cursorY += lineH;
 
         if (line.endsParagraph) {
@@ -200,4 +204,51 @@ export function layoutStory(chain, doc) {
   }
   if (pIndex < paragraphs.length) overflow = true;
   return { byFrame, overflow };
+}
+
+// Resolve the ordered thread chain a frame belongs to (head → … → tail).
+function storyChain(head, doc) {
+  const all = [...doc.pages, ...doc.masters].flatMap((c) => c.objects);
+  const byId = new Map(all.map((o) => [o.id, o]));
+  const chain = [head];
+  let cur = head;
+  while (cur.threadNext && byId.get(cur.threadNext) && !chain.includes(byId.get(cur.threadNext))) {
+    cur = byId.get(cur.threadNext); chain.push(cur);
+  }
+  return chain;
+}
+
+// Scan every text story and return its headings in reading order, each with the
+// page it actually lands on after layout (threading aware).
+// Returns [{ text, level, page, y }].
+export function collectHeadings(doc) {
+  const framePage = new Map();
+  doc.pages.forEach((p, i) => p.objects.forEach((o) => framePage.set(o.id, i + 1)));
+
+  const heads = [];
+  for (const p of doc.pages) {
+    for (const o of p.objects) {
+      if (o.type === 'text' && !o.threadPrev && !o.field) heads.push(o);
+    }
+  }
+
+  const out = [];
+  let seq = 0;
+  for (const head of heads) {
+    const chain = storyChain(head, doc);
+    const layout = layoutStory(chain, doc);
+    for (const frame of chain) {
+      const page = framePage.get(frame.id);
+      if (page == null) continue; // frame on a master — skip
+      const fl = layout.byFrame[frame.id];
+      if (!fl) continue;
+      // Lines are already in reading order (column-by-column, top-to-bottom),
+      // so a monotonic seq preserves order even for multi-column frames.
+      for (const line of fl.lines) {
+        if (line.heading) out.push({ text: line.heading.text, level: line.heading.level, page, seq: seq++ });
+      }
+    }
+  }
+  out.sort((a, b) => a.page - b.page || a.seq - b.seq);
+  return out;
 }

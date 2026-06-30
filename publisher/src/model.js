@@ -163,6 +163,30 @@ export function makeImage(layerId, src, naturalW, naturalH) {
   };
 }
 
+// A generated table of contents. Entries are filled by scanning headings.
+export function makeToc(layerId) {
+  return {
+    ...baseObject(layerId),
+    type: 'toc',
+    w: 360, h: 240,
+    title: 'Contents',
+    levels: [1, 2, 3],          // which heading levels to include
+    entries: [],                // generated: [{ text, level, page }]
+    fontFamily: 'Georgia, serif',
+    titleSize: 20,
+    titleColor: '#7a2d1f',
+    size: 11,
+    color: '#222222',
+    lineHeight: 1.6,
+    indent: 16,                 // per-level indent
+    leader: '·',                // dot-leader character
+    padding: 6,
+    fill: null,
+    stroke: null,
+    strokeWidth: 0,
+  };
+}
+
 // A data table — ideal for random/roll tables (e.g. d20 → result).
 export function makeTable(layerId) {
   return {

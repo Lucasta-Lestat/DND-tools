@@ -6,8 +6,8 @@ export const PERSONAS = {
     label: 'Publisher',
     color: '#2f81f7',
     blurb: 'Page layout, text frames, master pages, linked text flow.',
-    tools: ['move', 'sep', 'text', 'pictureframe', 'table', 'sep', 'rect', 'ellipse', 'line', 'sep', 'thread', 'link'],
-    panels: ['transform', 'table', 'links', 'pages', 'layers', 'textstyles', 'color'],
+    tools: ['move', 'sep', 'text', 'pictureframe', 'table', 'toc', 'sep', 'rect', 'ellipse', 'line', 'sep', 'thread', 'link'],
+    panels: ['transform', 'toc', 'table', 'links', 'pages', 'layers', 'textstyles', 'color'],
   },
   designer: {
     label: 'Designer',
@@ -36,6 +36,7 @@ export const TOOLS = {
   pen:          { icon: '✒', name: 'Pen',           kbd: 'N', cursor: 'crosshair', create: 'line' },
   thread:       { icon: '⛓', name: 'Link Text Frames', kbd: 'K', cursor: 'crosshair' },
   table:        { icon: '▦', name: 'Table',           kbd: 'B', cursor: 'crosshair', create: 'table' },
+  toc:          { icon: '☰', name: 'Table of Contents', kbd: 'C', cursor: 'crosshair', create: 'toc' },
   link:         { icon: '🔗', name: 'Hyperlink / Cross-reference', kbd: 'H', cursor: 'pointer' },
   crop:         { icon: '⌗', name: 'Crop / Fit',    kbd: 'C', cursor: 'crosshair' },
   adjust:       { icon: '◐', name: 'Adjust Image',  kbd: 'J', cursor: 'default' },

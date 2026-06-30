@@ -1,9 +1,9 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene, tableContentHeight } from './renderer.js';
+import { fitView, drawScene, tableContentHeight, tocContentHeight } from './renderer.js';
 import { uid, makePage, PAGE_PRESETS } from './model.js';
-import { startTextEdit, followLink, ensureAnchorName } from './interaction.js';
+import { startTextEdit, followLink, ensureAnchorName, regenerateToc } from './interaction.js';
 
 const collapsed = new Set();
 
@@ -118,6 +118,7 @@ export function renderStudio() {
   const panels = PERSONAS[store.ui.persona].panels;
   const builders = {
     transform: buildTransform,
+    toc: buildToc,
     table: buildTable,
     links: buildLinks,
     pages: buildPages,
@@ -482,6 +483,66 @@ function buildImageAdjust() {
     el('button', { onclick: () => { store.ui._replaceTarget = o.id; document.getElementById('file-image').click(); } }, 'Replace image…'),
   ]));
   return section('imageadjust', 'Image Adjustments', kids);
+}
+
+/* ---- Table of contents ---- */
+function tocMutate(label, fn, regen) {
+  const o = selectedObjects().find((s) => s.type === 'toc');
+  if (!o) return;
+  begin(label); fn(o); if (regen) regenerateToc(o); else o.h = tocContentHeight(o); commit(label);
+}
+
+function buildToc() {
+  const o = selectedObjects().find((s) => s.type === 'toc');
+  if (!o) return section('toc', 'Table of Contents', [el('div', { class: 'empty', text: 'Select a contents block (Contents tool, C) to edit it.' })]);
+  const kids = [];
+
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { class: 'on', onclick: () => tocMutate('refresh toc', () => {}, true), title: 'Rescan headings and rebuild' }, '↻ Generate / Refresh'),
+  ]));
+  kids.push(el('div', { class: 'muted', text: `${(o.entries || []).length} entries · double-click an entry to jump to its page.` }));
+
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Include' }),
+    levelToggle(o, 1, 'H1'), levelToggle(o, 2, 'H2'), levelToggle(o, 3, 'H3'),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Title' }),
+    el('input', { class: 'grow', type: 'text', value: o.title || '', style: 'width:100%',
+      onchange: (e) => tocMutate('toc title', (t) => t.title = e.target.value) }),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Font' }),
+    select(['Georgia, serif', 'system-ui, sans-serif', '"Times New Roman", serif', '"Trebuchet MS", sans-serif'], o.fontFamily, (v) => tocMutate('toc font', (t) => t.fontFamily = v)),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    num('Size', o.size, (v) => tocMutate('toc size', (t) => t.size = Math.max(5, v)), { step: 0.5, min: 5 }),
+    num('Title', o.titleSize, (v) => tocMutate('toc tsize', (t) => t.titleSize = Math.max(6, v)), { step: 0.5, min: 6 }),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    num('Indent', o.indent, (v) => tocMutate('toc indent', (t) => t.indent = Math.max(0, v)), { min: 0 }),
+    num('Leading', o.lineHeight, (v) => tocMutate('toc lead', (t) => t.lineHeight = Math.max(1, v)), { step: 0.05, min: 1 }),
+    el('div', { class: 'field' }, [el('label', { text: 'Leader' }),
+      el('input', { type: 'text', maxlength: 1, value: o.leader || '', style: 'width:34px',
+        onchange: (e) => tocMutate('toc leader', (t) => t.leader = e.target.value.slice(0, 1)) })]),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Title colour' }),
+    colorInput(o.titleColor || '#7a2d1f', (c) => tocMutate('toc tcolor', (t) => t.titleColor = c)),
+    colorInput(o.color || '#222222', (c) => tocMutate('toc color', (t) => t.color = c)),
+  ]));
+  kids.push(el('div', { class: 'muted', text: 'Headings come from text starting with “# ”, “## ”, or “### ”. Refresh after editing or repaginating.' }));
+  return section('toc', 'Table of Contents', kids);
+}
+
+function levelToggle(o, level, label) {
+  const on = (o.levels || []).includes(level);
+  return el('button', { class: 'mini', style: on ? 'background:var(--accent);color:#fff' : '',
+    onclick: () => tocMutate('toc levels', (t) => {
+      const set = new Set(t.levels || []);
+      if (set.has(level)) set.delete(level); else set.add(level);
+      t.levels = [...set].sort();
+    }, true) }, label);
 }
 
 /* ---- Tables ---- */

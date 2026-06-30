@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTableLayout } from './renderer.js';
+import { fitView, computeTableLayout, computeTocLayout } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -173,6 +173,41 @@ function drawObjExport(g, obj, pl, imageMap) {
   }
   if (obj.type === 'text') drawTextExport(g, obj, pl);
   if (obj.type === 'table') drawTableExport(g, obj);
+  if (obj.type === 'toc') drawTocExport(g, obj);
+  g.restore();
+}
+
+function drawTocExport(g, obj) {
+  const L = computeTocLayout(obj);
+  if (obj.fill) { g.fillStyle = obj.fill; g.fillRect(0, 0, obj.w, obj.h); }
+  g.save();
+  g.beginPath(); g.rect(0, 0, obj.w, obj.h); g.clip();
+  g.textBaseline = 'alphabetic';
+  if (obj.title) {
+    g.font = `700 ${obj.titleSize}px ${obj.fontFamily}`;
+    g.fillStyle = obj.titleColor || obj.color; g.textAlign = 'left';
+    g.fillText(obj.title, L.pad, L.pad + obj.titleSize * 0.82);
+  }
+  for (const row of L.rows) {
+    const e = row.entry;
+    g.font = `${e.level === 1 ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    g.fillStyle = obj.color;
+    const baseline = row.y + obj.size * 0.82;
+    const x0 = L.pad + (e.level - 1) * obj.indent;
+    const pageStr = String(e.page);
+    g.textAlign = 'left'; g.fillText(e.text, x0, baseline);
+    const textW = g.measureText(e.text).width;
+    g.textAlign = 'right'; g.fillText(pageStr, obj.w - L.pad, baseline);
+    const pageW = g.measureText(pageStr).width;
+    if (obj.leader) {
+      g.textAlign = 'left';
+      const start = x0 + textW + 4, end = obj.w - L.pad - pageW - 4;
+      const dotW = g.measureText(obj.leader + ' ').width || 4;
+      const n = Math.floor((end - start) / dotW);
+      if (n > 0) { g.fillStyle = '#999'; g.fillText((obj.leader + ' ').repeat(n), start, baseline); }
+    }
+  }
+  g.textAlign = 'left';
   g.restore();
 }
 
@@ -332,7 +367,26 @@ function svgForObject(obj, pl) {
     return `<g${rot}${op}>${out}${inner}</g>`;
   }
   if (obj.type === 'table') return `<g${rot}${op}>${svgForTable(obj, x, y)}</g>`;
+  if (obj.type === 'toc') return `<g${rot}${op}>${svgForToc(obj, x, y)}</g>`;
   return '';
+}
+
+function svgForToc(obj, x, y) {
+  const L = computeTocLayout(obj);
+  let out = '';
+  if (obj.fill) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="${obj.fill}"/>`;
+  if (obj.title) {
+    out += `<text x="${x + L.pad}" y="${y + L.pad + obj.titleSize * 0.82}" font-family="${esc(obj.fontFamily)}" font-size="${obj.titleSize}" font-weight="700" fill="${obj.titleColor || obj.color}">${esc(obj.title)}</text>`;
+  }
+  for (const row of L.rows) {
+    const e = row.entry;
+    const baseline = y + row.y + obj.size * 0.82;
+    const x0 = x + L.pad + (e.level - 1) * obj.indent;
+    const weight = e.level === 1 ? '700' : '400';
+    out += `<text x="${x0}" y="${baseline}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${obj.color}">${esc(e.text)}</text>`;
+    out += `<text x="${x + obj.w - L.pad}" y="${baseline}" text-anchor="end" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${obj.color}">${e.page}</text>`;
+  }
+  return out;
 }
 
 function svgForTable(obj, x, y) {
@@ -410,6 +464,13 @@ function pdfOverlays(spread) {
         if (href) {
           const tgt = obj.link.type === 'url' ? ' target="_blank"' : '';
           out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x}pt;top:${obj.y}pt;width:${obj.w}pt;height:${obj.h}pt"></a>`;
+        }
+      }
+      // TOC: each entry links to its page
+      if (obj.type === 'toc') {
+        const L = computeTocLayout(obj);
+        for (const row of L.rows) {
+          out += `<a class="lnk" href="#apub-page-${row.entry.page}" style="left:${pl.ox + obj.x}pt;top:${obj.y + row.y}pt;width:${obj.w}pt;height:${row.h}pt"></a>`;
         }
       }
     }

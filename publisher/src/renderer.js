@@ -266,6 +266,10 @@ function drawObject(obj, pl, fromMaster) {
       drawText(obj, r, pl);
     } else if (obj.type === 'table') {
       drawTable(obj);
+    } else if (obj.type === 'toc') {
+      if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, r.w, r.h); }
+      if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, r.w, r.h); }
+      drawToc(obj);
     }
   });
 }
@@ -360,6 +364,77 @@ function drawTable(obj) {
     }
   }
   ctx.textAlign = 'left';
+}
+
+/* ---------- table of contents ---------- */
+
+// Pure vertical layout for a TOC (object-local pts).
+export function computeTocLayout(obj) {
+  const pad = obj.padding ?? 6;
+  const titleH = obj.title ? obj.titleSize * obj.lineHeight : 0;
+  const rowH = obj.size * obj.lineHeight;
+  const rows = [];
+  let y = pad + titleH;
+  for (const entry of obj.entries || []) { rows.push({ y, h: rowH, entry }); y += rowH; }
+  return { pad, titleH, rowH, rows, totalH: y + pad };
+}
+
+export function tocContentHeight(obj) { return computeTocLayout(obj).totalH; }
+
+// Which TOC entry sits under an object-local point (or null).
+export function tocEntryAt(obj, lx, ly) {
+  if (lx < 0 || lx > obj.w) return null;
+  const L = computeTocLayout(obj);
+  for (let i = 0; i < L.rows.length; i++) {
+    const r = L.rows[i];
+    if (ly >= r.y && ly <= r.y + r.h) return { index: i, entry: r.entry };
+  }
+  return null;
+}
+
+function drawToc(obj) {
+  const L = computeTocLayout(obj);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, obj.w, obj.h); ctx.clip();
+  ctx.textBaseline = 'alphabetic';
+  const pad = L.pad;
+  if (obj.title) {
+    ctx.font = `700 ${obj.titleSize}px ${obj.fontFamily}`;
+    ctx.fillStyle = obj.titleColor || obj.color;
+    ctx.textAlign = 'left';
+    ctx.fillText(obj.title, pad, pad + obj.titleSize * 0.82);
+  }
+  for (const row of L.rows) {
+    const e = row.entry;
+    const bold = e.level === 1;
+    ctx.font = `${bold ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    ctx.fillStyle = obj.color;
+    const baseline = row.y + obj.size * 0.82;
+    const x0 = pad + (e.level - 1) * obj.indent;
+    const pageStr = String(e.page);
+    ctx.textAlign = 'left';
+    ctx.fillText(e.text, x0, baseline);
+    const textW = ctx.measureText(e.text).width;
+    ctx.textAlign = 'right';
+    ctx.fillText(pageStr, obj.w - pad, baseline);
+    const pageW = ctx.measureText(pageStr).width;
+    // dot leaders between the entry text and the page number
+    if (obj.leader) {
+      ctx.textAlign = 'left';
+      const start = x0 + textW + 4;
+      const end = obj.w - pad - pageW - 4;
+      const dotW = ctx.measureText(obj.leader + ' ').width || 4;
+      if (end > start && dotW > 0) {
+        const n = Math.floor((end - start) / dotW);
+        if (n > 0) {
+          ctx.fillStyle = '#999';
+          ctx.fillText((obj.leader + ' ').repeat(n), start, baseline);
+        }
+      }
+    }
+  }
+  ctx.textAlign = 'left';
+  ctx.restore();
 }
 
 function drawPlaceholder(r) {

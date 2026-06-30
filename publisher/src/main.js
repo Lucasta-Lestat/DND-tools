@@ -1,10 +1,11 @@
 // App bootstrap: build the default document, wire panels, canvas, rulers,
 // keyboard shortcuts, menu actions, and the render loop.
 import { store, subscribe, emit, begin, commit, findObject, undo, redo, resetHistory, getSpreads } from './store.js';
-import { newDocument, baseText, makeTable, uid } from './model.js';
+import { newDocument, baseText, makeTable, makeToc, uid } from './model.js';
+import { collectHeadings } from './textlayout.js';
 import { PERSONAS, TOOLS } from './personas.js';
 import {
-  resizeCanvas, drawScene, fitView, getView, screenToDoc,
+  resizeCanvas, drawScene, fitView, getView, screenToDoc, tocContentHeight,
 } from './renderer.js';
 import {
   initInteraction, repositionEditorIfOpen, commitTextEdit, startTextEdit,
@@ -165,6 +166,17 @@ function seedDocument() {
   });
   table.h = 7 * (table.size * table.lineHeight + table.padding * 2);
   p2.objects.push(tableHead, table);
+
+  // Front matter: a generated table of contents on its own page (page 1),
+  // which pushes the chapters to pages 2–3 — note the live page numbers.
+  const tocPage = { id: uid('P'), masterId: doc.masters[0].id, showMaster: true, objects: [] };
+  doc.pages.unshift(tocPage);
+  const toc = makeToc(layerId);
+  Object.assign(toc, { x: 54, y: 80, w: doc.settings.pageWidth - 94 });
+  const heads = collectHeadings(doc);
+  toc.entries = heads.filter((h) => toc.levels.includes(h.level)).map((h) => ({ text: h.text, level: h.level, page: h.page }));
+  toc.h = tocContentHeight(toc);
+  tocPage.objects.push(toc);
   return doc;
 }
 

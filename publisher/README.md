@@ -27,7 +27,7 @@ panels while editing the *same* pages:
 
 | Persona | Focus | Tools | Panels |
 | --- | --- | --- | --- |
-| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
+| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, **Contents**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Table of Contents, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
 | **Designer** | Vector drawing | Move, Node, Rect, Ellipse, Line, Pen, Text | Transform, **Arrange & Align**, Layers, Color |
 | **Photo** | Raster images | Move, Picture Frame, Crop, Adjust | Transform, **Image Adjustments**, Layers |
 
@@ -43,6 +43,15 @@ Switch with the buttons or keys **1 / 2 / 3**.
   (threading)**: link frames with the chain tool and a story flows column-to-column
   and frame-to-frame. Lightweight markup — start a line with `# ` or `## ` for
   headings — lets one story mix styles.
+- **Table of contents** — a generated **Contents** block built by scanning your
+  `#`/`##`/`###` headings. Choose which levels to include; entries are indented by
+  level with **dot leaders** and **live page numbers**. Click **Generate / Refresh**
+  after writing or repaginating, double-click an entry to jump to its page, and the
+  TOC exports as clickable links in the PDF. (The starter document ships with one as
+  front matter — note the page numbers update when content moves.)
+
+![Generated table of contents](docs/toc.png)
+
 ![Roll table with the Table panel](docs/tables.png)
 
 - **Tables** — purpose-built for **roll tables**. Header row, zebra striping,
@@ -74,7 +83,7 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 | | |
 | --- | --- |
-| `V` Move · `T` Text · `P` Picture · `B` Table · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
+| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
 | `1` / `2` / `3` | Publisher / Designer / Photo persona |
 | `Ctrl/Cmd Z` · `Ctrl/Cmd Shift Z` | undo / redo |
 | `Ctrl/Cmd S` · `Ctrl/Cmd O` | save / open |
@@ -102,6 +111,18 @@ Switch with the buttons or keys **1 / 2 / 3**.
    header colours, zebra striping, and borders in the panel.
 4. Click **🎲 Roll** to roll and highlight the matching row.
 
+## Table of contents, quickly
+
+1. Write your chapters/sections using heading markup — start a line with `# `,
+   `## `, or `### ` (the same markup the styles use).
+2. Pick the **Contents** tool (`C`) and drag out a block (usually on a front
+   page). It generates immediately from the current headings.
+3. In the **Table of Contents** panel choose which levels to include (H1/H2/H3),
+   set the title, fonts, indent, and leader character.
+4. After editing headings or when pagination changes, click **Generate /
+   Refresh**. Double-click any entry to jump to its page; entries become clickable
+   links in the exported PDF.
+
 ## Cross-references, quickly
 
 - **Auto page numbers in text:** anchor the target object (select it → *Cross-
@@ -122,8 +143,8 @@ Plain ES modules, no framework:
 | `src/store.js` | App state, spreads/derived selectors, undo-redo history |
 | `src/model.js` | Document/object factories, presets, default styles |
 | `src/personas.js` | StudioLink personas and tool definitions |
-| `src/textlayout.js` | Wrapping, columns, paragraph styles, threading, cross-reference tokens |
-| `src/renderer.js` | Canvas drawing, table layout, hit-testing, selection chrome |
+| `src/textlayout.js` | Wrapping, columns, paragraph styles, threading, cross-reference tokens, heading collection |
+| `src/renderer.js` | Canvas drawing, table & TOC layout, hit-testing, selection chrome |
 | `src/interaction.js` | Pointer tools: select/move/resize/rotate/create/thread/cell-edit/link |
 | `src/panels.js` | Persona switcher, tool strip, context bar, studio panels (incl. Table & Links) |
 | `src/io.js` | Save/open and PNG/SVG/PDF export (with clickable PDF links) |
