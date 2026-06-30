@@ -47,6 +47,44 @@ function resolveParagraph(rawLine, base, doc) {
   return { text, style };
 }
 
+// Map every named anchor to the page number it lives on (real pages only).
+export function buildAnchorPageMap(doc) {
+  const map = new Map();
+  doc.pages.forEach((page, i) => {
+    for (const o of page.objects) if (o.anchorName) map.set(o.anchorName, i + 1);
+  });
+  return map;
+}
+
+// Replace inline cross-reference tokens with the live page number:
+//   {page:Anchor}  {ref:Anchor}  ->  "12"  (or "?" if the anchor is missing)
+export function resolveRefs(text, anchorMap) {
+  if (!text || text.indexOf('{') === -1) return text;
+  return text.replace(/\{(?:page|ref):\s*([^}]+?)\s*\}/g, (_, name) => {
+    const n = anchorMap.get(name.trim());
+    return n != null ? String(n) : '?';
+  });
+}
+
+// Wrap plain text to a width; returns an array of line strings. Used by tables.
+export function wrapText(text, style, width) {
+  setMeasureStyle(style);
+  const spaceW = mctx.measureText(' ').width;
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (!words.length) { out.push(''); continue; }
+    let line = '', lineW = 0;
+    for (const w of words) {
+      const ww = mctx.measureText(w).width;
+      if (line && lineW + spaceW + ww > width) { out.push(line); line = w; lineW = ww; }
+      else { lineW += (line ? spaceW : 0) + ww; line += (line ? ' ' : '') + w; }
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
 // Column rectangles inside a frame (local coords).
 function columnsOf(frame) {
   const pad = frame.padding ?? 4;
@@ -108,7 +146,8 @@ function positionLine(line, style, colW, isLast) {
 export function layoutStory(chain, doc) {
   const head = chain[0];
   const base = frameBaseStyle(head, doc);
-  const raw = (head.text || '').split('\n');
+  const anchorMap = buildAnchorPageMap(doc);
+  const raw = resolveRefs(head.text || '', anchorMap).split('\n');
   const paragraphs = raw.map((l) => resolveParagraph(l, base, doc));
 
   const byFrame = {};

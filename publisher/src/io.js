@@ -1,8 +1,8 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView } from './renderer.js';
-import { layoutStory } from './textlayout.js';
+import { fitView, computeTableLayout } from './renderer.js';
+import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
 export function saveProject() {
@@ -172,7 +172,45 @@ function drawObjExport(g, obj, pl, imageMap) {
     g.lineWidth = obj.strokeWidth; g.strokeStyle = obj.stroke; roundRect(g, 0, 0, w, h, obj.radius || 0); g.stroke();
   }
   if (obj.type === 'text') drawTextExport(g, obj, pl);
+  if (obj.type === 'table') drawTableExport(g, obj);
   g.restore();
+}
+
+function drawTableExport(g, obj) {
+  const L = computeTableLayout(obj);
+  const rows = obj.rows || [];
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    let bg = null;
+    if (isHeader) bg = obj.headerFill;
+    else if (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) bg = obj.zebra;
+    else if (obj.fill) bg = obj.fill;
+    if (bg) { g.fillStyle = bg; g.fillRect(0, L.rowY[r], obj.w, L.rowH[r]); }
+  }
+  if (obj.borderWidth > 0) {
+    g.strokeStyle = obj.borderColor || '#000'; g.lineWidth = obj.borderWidth;
+    g.strokeRect(0, 0, obj.w, L.totalH);
+    g.beginPath();
+    for (let r = 1; r < rows.length; r++) { g.moveTo(0, L.rowY[r]); g.lineTo(obj.w, L.rowY[r]); }
+    for (let c = 1; c < L.ncols; c++) { g.moveTo(L.colX[c], 0); g.lineTo(L.colX[c], L.totalH); }
+    g.stroke();
+  }
+  g.textBaseline = 'alphabetic';
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
+    g.font = `${isHeader ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    g.fillStyle = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+    for (let c = 0; c < L.ncols; c++) {
+      const txt = rows[r][c] != null ? rows[r][c] : '';
+      const lines = wrapText(txt, style, Math.max(8, L.colW[c] - L.pad * 2));
+      const align = obj.align || 'left';
+      g.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
+      const tx = L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
+      lines.forEach((ln, i) => g.fillText(ln, tx, L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH));
+    }
+  }
+  g.textAlign = 'left';
 }
 
 function drawTextExport(g, obj, pl) {
@@ -248,13 +286,15 @@ export function exportSVG() {
   const spread = getSpreads()[store.ui.spreadIndex];
   const s = store.doc.settings;
   const sw = spreadWidth(spread), sh = s.pageHeight;
-  const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${sw}" height="${sh}" viewBox="0 0 ${sw} ${sh}">`,
+  const parts = [`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${sw}" height="${sh}" viewBox="0 0 ${sw} ${sh}">`,
     `<rect width="${sw}" height="${sh}" fill="#ffffff"/>`];
   for (const { obj, page } of objectsForSpread(spread)) {
     const layer = store.doc.layers.find((l) => l.id === obj.layerId);
     if (layer && !layer.visible) continue;
     const pl = placementsFor(spread).find((p) => p.page === page);
-    parts.push(svgForObject(obj, pl));
+    let markup = svgForObject(obj, pl);
+    if (obj.link && obj.link.type === 'url') markup = `<a xlink:href="${esc(obj.link.target)}" target="_blank">${markup}</a>`;
+    parts.push(markup);
   }
   parts.push('</svg>');
   download(new Blob([parts.join('\n')], { type: 'image/svg+xml' }), `${slug(store.doc.meta.title)}-spread${store.ui.spreadIndex + 1}.svg`);
@@ -291,7 +331,42 @@ function svgForObject(obj, pl) {
     if (obj.fill) out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${obj.fill}"/>`;
     return `<g${rot}${op}>${out}${inner}</g>`;
   }
+  if (obj.type === 'table') return `<g${rot}${op}>${svgForTable(obj, x, y)}</g>`;
   return '';
+}
+
+function svgForTable(obj, x, y) {
+  const L = computeTableLayout(obj);
+  const rows = obj.rows || [];
+  let out = '';
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    let bg = isHeader ? obj.headerFill : (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) ? obj.zebra : obj.fill;
+    if (bg) out += `<rect x="${x}" y="${y + L.rowY[r]}" width="${obj.w}" height="${L.rowH[r]}" fill="${bg}"/>`;
+  }
+  if (obj.borderWidth > 0) {
+    const bc = obj.borderColor || '#000', bw = obj.borderWidth;
+    out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${L.totalH}" fill="none" stroke="${bc}" stroke-width="${bw}"/>`;
+    for (let r = 1; r < rows.length; r++) out += `<line x1="${x}" y1="${y + L.rowY[r]}" x2="${x + obj.w}" y2="${y + L.rowY[r]}" stroke="${bc}" stroke-width="${bw}"/>`;
+    for (let c = 1; c < L.ncols; c++) out += `<line x1="${x + L.colX[c]}" y1="${y}" x2="${x + L.colX[c]}" y2="${y + L.totalH}" stroke="${bc}" stroke-width="${bw}"/>`;
+  }
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
+    const color = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+    const weight = isHeader ? '700' : '400';
+    const align = obj.align || 'left';
+    const anchor = align === 'center' ? 'middle' : align === 'right' ? 'end' : 'start';
+    for (let c = 0; c < L.ncols; c++) {
+      const txt = rows[r][c] != null ? rows[r][c] : '';
+      const lines = wrapText(txt, style, Math.max(8, L.colW[c] - L.pad * 2));
+      const tx = x + L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
+      lines.forEach((ln, i) => {
+        out += `<text x="${tx}" y="${y + L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH}" text-anchor="${anchor}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${color}">${esc(ln)}</text>`;
+      });
+    }
+  }
+  return out;
 }
 
 /* ---------- PDF via print (all spreads) ---------- */
@@ -303,17 +378,49 @@ export function exportPDF() {
     const w = spreadWidth(spreads[0]), h = s.pageHeight;
     const win = window.open('', '_blank');
     if (!win) { alert('Allow pop-ups to export PDF.'); return; }
-    const pages = imgs.map((src) => `<div class="page"><img src="${src}"/></div>`).join('');
+    // Chromium preserves in-document #anchors and external hrefs when printing to PDF,
+    // so cross-references and hyperlinks stay clickable in the exported file.
+    const pages = spreads.map((sp, i) => `<div class="page">
+        <img src="${imgs[i]}"/>${pdfOverlays(sp)}
+      </div>`).join('');
     win.document.write(`<!doctype html><html><head><title>${esc(store.doc.meta.title)}</title>
       <style>
         @page { size: ${w}pt ${h}pt; margin: 0; }
         html,body{margin:0;padding:0;background:#fff;}
-        .page{width:${w}pt;height:${h}pt;page-break-after:always;overflow:hidden;}
-        .page img{width:100%;height:100%;display:block;}
-        @media screen { body{background:#444;padding:20px;} .page{margin:0 auto 20px;box-shadow:0 2px 12px #0008;} }
-      </style></head><body onload="setTimeout(()=>window.print(),300)">${pages}</body></html>`);
+        .page{position:relative;width:${w}pt;height:${h}pt;page-break-after:always;overflow:hidden;}
+        .page img{position:absolute;inset:0;width:100%;height:100%;display:block;}
+        .page a.lnk{position:absolute;display:block;}
+        .page span.anc{position:absolute;width:1pt;height:1pt;}
+        @media screen { body{background:#444;padding:20px;} .page{margin:0 auto 20px;box-shadow:0 2px 12px #0008;} .page a.lnk{outline:1px dashed rgba(47,129,247,.5);} }
+      </style></head><body onload="setTimeout(()=>window.print(),350)">${pages}</body></html>`);
     win.document.close();
   });
+}
+
+// Build absolutely-positioned anchor targets and clickable links for one spread.
+function pdfOverlays(spread) {
+  const pls = placementsFor(spread);
+  let out = '';
+  for (const pl of pls) {
+    if (pl.pageNumber != null) out += `<span class="anc" id="apub-page-${pl.pageNumber}" style="left:${pl.ox}pt;top:0pt"></span>`;
+    for (const obj of pl.page.objects) {
+      if (obj.anchorName) out += `<span class="anc" id="apub-anchor-${esc(slug(obj.anchorName))}" style="left:${pl.ox + obj.x}pt;top:${obj.y}pt"></span>`;
+      if (obj.link) {
+        const href = linkHref(obj.link);
+        if (href) {
+          const tgt = obj.link.type === 'url' ? ' target="_blank"' : '';
+          out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x}pt;top:${obj.y}pt;width:${obj.w}pt;height:${obj.h}pt"></a>`;
+        }
+      }
+    }
+  }
+  return out;
+}
+function linkHref(link) {
+  if (link.type === 'url') return link.target;
+  if (link.type === 'page') return `#apub-page-${parseInt(link.target, 10) || 1}`;
+  if (link.type === 'anchor') return `#apub-anchor-${slug(link.target)}`;
+  return null;
 }
 
 /* ---------- utils ---------- */

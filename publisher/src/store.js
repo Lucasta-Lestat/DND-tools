@@ -16,6 +16,8 @@ export const store = {
     showMargins: true,
     snap: true,
     editingTextId: null,
+    editingCell: null,  // { r, c } when editing a table cell
+    tableRoll: null,    // { tableId, row, value } transient roll-table highlight
     fillTarget: 'fill', // which attribute swatches apply to: 'fill' | 'stroke'
     masterEdit: null,   // master id currently being edited, or null for normal pages
   },

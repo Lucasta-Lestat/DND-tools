@@ -1,6 +1,6 @@
 // Canvas renderer for the active spread.
 import { store, activeSpread, spreadObjects, layerById } from './store.js';
-import { layoutStory } from './textlayout.js';
+import { layoutStory, wrapText } from './textlayout.js';
 
 const scene = document.getElementById('scene');
 const ctx = scene.getContext('2d');
@@ -264,8 +264,102 @@ function drawObject(obj, pl, fromMaster) {
       if (obj.fill) { ctx.fillStyle = obj.fill; pathRoundRect(0, 0, r.w, r.h, obj.radius || 0); ctx.fill(); }
       if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, r.w, r.h); }
       drawText(obj, r, pl);
+    } else if (obj.type === 'table') {
+      drawTable(obj);
     }
   });
+}
+
+/* ---------- tables ---------- */
+
+// Pure geometry for a table: column x/width and row y/height (object-local pts).
+export function computeTableLayout(obj) {
+  const pad = obj.padding ?? 5;
+  const rows = obj.rows || [];
+  const ncols = Math.max(1, ...rows.map((r) => r.length));
+  const weights = (obj.colWeights && obj.colWeights.length === ncols)
+    ? obj.colWeights : Array.from({ length: ncols }, () => 1);
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  const colW = weights.map((wt) => (obj.w * wt) / total);
+  const colX = []; let cx = 0;
+  for (let c = 0; c < ncols; c++) { colX.push(cx); cx += colW[c]; }
+  const lineH = obj.size * (obj.lineHeight || 1.2);
+  const rowH = [], rowY = []; let y = 0;
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
+    let maxLines = 1;
+    for (let c = 0; c < ncols; c++) {
+      const txt = rows[r][c] != null ? rows[r][c] : '';
+      maxLines = Math.max(maxLines, wrapText(txt, style, Math.max(8, colW[c] - pad * 2)).length);
+    }
+    const h = maxLines * lineH + pad * 2;
+    rowY.push(y); rowH.push(h); y += h;
+  }
+  return { pad, ncols, colW, colX, rowH, rowY, totalH: y, lineH };
+}
+
+// Natural content height — used to keep obj.h in sync with the table.
+export function tableContentHeight(obj) { return computeTableLayout(obj).totalH; }
+
+// Which cell sits under an object-local point (or null).
+export function tableCellAt(obj, lx, ly) {
+  const L = computeTableLayout(obj);
+  if (lx < 0 || lx > obj.w || ly < 0 || ly > L.totalH) return null;
+  let c = 0; while (c < L.ncols - 1 && lx > L.colX[c + 1]) c++;
+  let r = 0; while (r < L.rowY.length - 1 && ly > L.rowY[r + 1]) r++;
+  if (r >= (obj.rows || []).length) return null;
+  return { r, c, x: L.colX[c], y: L.rowY[r], w: L.colW[c], h: L.rowH[r] };
+}
+
+function drawTable(obj) {
+  const L = computeTableLayout(obj);
+  const rows = obj.rows || [];
+  // backgrounds
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    let bg = null;
+    if (isHeader) bg = obj.headerFill;
+    else if (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) bg = obj.zebra;
+    else if (obj.fill) bg = obj.fill;
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, L.rowY[r], obj.w, L.rowH[r]); }
+  }
+  // roll highlight
+  const roll = store.ui.tableRoll;
+  if (roll && roll.tableId === obj.id && roll.row >= 0 && roll.row < rows.length) {
+    ctx.fillStyle = 'rgba(47,129,247,.28)';
+    ctx.fillRect(0, L.rowY[roll.row], obj.w, L.rowH[roll.row]);
+  }
+  // borders
+  if (obj.borderWidth > 0) {
+    ctx.strokeStyle = obj.borderColor || '#000';
+    ctx.lineWidth = obj.borderWidth;
+    ctx.strokeRect(0, 0, obj.w, L.totalH);
+    ctx.beginPath();
+    for (let r = 1; r < rows.length; r++) { ctx.moveTo(0, L.rowY[r]); ctx.lineTo(obj.w, L.rowY[r]); }
+    for (let c = 1; c < L.ncols; c++) { ctx.moveTo(L.colX[c], 0); ctx.lineTo(L.colX[c], L.totalH); }
+    ctx.stroke();
+  }
+  // text
+  ctx.textBaseline = 'alphabetic';
+  for (let r = 0; r < rows.length; r++) {
+    const isHeader = r === 0 && obj.headerRow;
+    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
+    ctx.font = `${isHeader ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    ctx.fillStyle = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+    for (let c = 0; c < L.ncols; c++) {
+      const txt = rows[r][c] != null ? rows[r][c] : '';
+      const cw = L.colW[c] - L.pad * 2;
+      const lines = wrapText(txt, style, Math.max(8, cw));
+      const align = obj.align || 'left';
+      ctx.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
+      const tx = L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
+      lines.forEach((ln, i) => {
+        ctx.fillText(ln, tx, L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH);
+      });
+    }
+  }
+  ctx.textAlign = 'left';
 }
 
 function drawPlaceholder(r) {
@@ -373,9 +467,31 @@ function drawSelection() {
     // rotation stalk
     ctx.beginPath(); ctx.moveTo(cc.n.x, cc.n.y); ctx.lineTo(cc.rot.x, cc.rot.y); ctx.stroke();
     if (obj.type === 'text') drawThreadMarkers(obj, cc);
+    drawLinkBadge(obj, cc);
     if (sel.length === 1) {
       for (const k of ['nw', 'ne', 'se', 'sw', 'n', 'e', 's', 'w', 'rot']) drawHandle(cc[k], k === 'rot');
     }
+  }
+  ctx.restore();
+}
+
+// Small glyphs marking objects that are a hyperlink source and/or anchor target.
+function drawLinkBadge(obj, cc) {
+  const tags = [];
+  if (obj.link) tags.push({ t: '🔗', c: '#2f81f7' });
+  if (obj.anchorName) tags.push({ t: '⚓', c: '#7a2d1f' });
+  if (!tags.length) return;
+  ctx.save();
+  ctx.font = '11px system-ui';
+  ctx.textBaseline = 'middle';
+  let x = cc.ne.x + 6;
+  for (const tag of tags) {
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = tag.c;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x + 7, cc.ne.y, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillText(tag.t, x, cc.ne.y);
+    x += 20;
   }
   ctx.restore();
 }

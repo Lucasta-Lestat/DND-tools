@@ -1,9 +1,9 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene } from './renderer.js';
+import { fitView, drawScene, tableContentHeight } from './renderer.js';
 import { uid, makePage, PAGE_PRESETS } from './model.js';
-import { startTextEdit } from './interaction.js';
+import { startTextEdit, followLink, ensureAnchorName } from './interaction.js';
 
 const collapsed = new Set();
 
@@ -78,14 +78,18 @@ export function renderContextbar() {
 
   const sel = selectedObjects();
   if (sel.length) {
-    host.append(el('div', { class: 'grp' }, [
+    const grp = el('div', { class: 'grp' }, [
       el('span', { class: 'hint', text: sel.length === 1 ? `${sel[0].type} selected` : `${sel.length} objects` }),
       el('button', { onclick: () => orderChange('front') , title: 'Bring to front' }, '⤒'),
       el('button', { onclick: () => orderChange('forward'), title: 'Forward' }, '↑'),
       el('button', { onclick: () => orderChange('backward'), title: 'Backward' }, '↓'),
       el('button', { onclick: () => orderChange('back'), title: 'Send to back' }, '⤓'),
       el('button', { class: 'danger', onclick: deleteSelection, title: 'Delete (Del)' }, '🗑'),
-    ]));
+    ]);
+    if (sel.length === 1 && sel[0].link) {
+      grp.append(el('button', { class: 'on', title: 'Follow link (or Ctrl/Cmd-click it)', onclick: () => followLink(sel[0]) }, '↪ Go'));
+    }
+    host.append(grp);
   }
 
   // view toggles
@@ -114,6 +118,8 @@ export function renderStudio() {
   const panels = PERSONAS[store.ui.persona].panels;
   const builders = {
     transform: buildTransform,
+    table: buildTable,
+    links: buildLinks,
     pages: buildPages,
     layers: buildLayers,
     textstyles: buildTextStyles,
@@ -159,8 +165,8 @@ function buildTransform() {
     num('Y', o.y, (v) => applyToSelection('move', (s) => s.y = v)),
   ]));
   kids.push(el('div', { class: 'row' }, [
-    num('W', o.w, (v) => applyToSelection('size', (s) => s.w = Math.max(1, v)), { min: 1 }),
-    num('H', o.h, (v) => applyToSelection('size', (s) => s.h = Math.max(1, v)), { min: 1 }),
+    num('W', o.w, (v) => applyToSelection('size', (s) => { s.w = Math.max(1, v); if (s.type === 'table') s.h = tableContentHeight(s); }), { min: 1 }),
+    num('H', o.h, (v) => applyToSelection('size', (s) => { if (s.type !== 'table') s.h = Math.max(1, v); }), { min: 1 }),
   ]));
   kids.push(el('div', { class: 'row' }, [
     num('°', o.rotation || 0, (v) => applyToSelection('rotate', (s) => s.rotation = v)),
@@ -478,6 +484,216 @@ function buildImageAdjust() {
   return section('imageadjust', 'Image Adjustments', kids);
 }
 
+/* ---- Tables ---- */
+function tableMutate(label, fn) {
+  const o = selectedObjects().find((s) => s.type === 'table');
+  if (!o) return;
+  begin(label); fn(o); o.h = tableContentHeight(o); commit(label);
+}
+
+function buildTable() {
+  const o = selectedObjects().find((s) => s.type === 'table');
+  if (!o) return section('table', 'Table', [el('div', { class: 'empty', text: 'Select a table (Table tool, B) to edit it.' })]);
+  const ncols = Math.max(1, ...o.rows.map((r) => r.length));
+  const dataRows = o.rows.length - (o.headerRow ? 1 : 0);
+  const kids = [];
+
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Rows' }),
+    el('div', { class: 'btnrow' }, [
+      el('button', { class: 'mini', onclick: () => tableMutate('row+', (t) => t.rows.push(Array.from({ length: ncols }, () => ''))) }, '+ Row'),
+      el('button', { class: 'mini', onclick: () => tableMutate('row-', (t) => { if (t.rows.length > 1) t.rows.pop(); }) }, '– Row'),
+    ]),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Cols' }),
+    el('div', { class: 'btnrow' }, [
+      el('button', { class: 'mini', onclick: () => tableMutate('col+', (t) => { t.rows.forEach((r) => r.push('')); t.colWeights = [...(t.colWeights || []), 1].slice(0, t.rows[0].length); }) }, '+ Col'),
+      el('button', { class: 'mini', onclick: () => tableMutate('col-', (t) => { if (t.rows[0].length > 1) { t.rows.forEach((r) => r.pop()); t.colWeights = (t.colWeights || []).slice(0, t.rows[0].length); } }) }, '– Col'),
+    ]),
+  ]));
+
+  // column weights
+  const weights = (o.colWeights && o.colWeights.length === ncols) ? o.colWeights : Array.from({ length: ncols }, () => 1);
+  const weightRow = el('div', { class: 'row' }, [el('label', { text: 'Widths' })]);
+  weights.forEach((wt, c) => {
+    weightRow.append(el('input', { type: 'number', min: 1, value: wt, style: 'width:42px',
+      onchange: (e) => tableMutate('col width', (t) => { const w = (t.colWeights && t.colWeights.length === ncols) ? t.colWeights.slice() : weights.slice(); w[c] = Math.max(1, parseFloat(e.target.value) || 1); t.colWeights = w; }) }));
+  });
+  kids.push(weightRow);
+
+  kids.push(el('div', { class: 'row' }, [
+    toggleBtn('Header row', o.headerRow, () => tableMutate('header', (t) => t.headerRow = !t.headerRow)),
+    toggleBtn('Zebra', !!o.zebra, () => tableMutate('zebra', (t) => t.zebra = t.zebra ? null : '#f0e6d2')),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Header' }),
+    colorInput(o.headerFill || '#5a3d2b', (c) => tableMutate('hfill', (t) => t.headerFill = c)),
+    colorInput(o.headerColor || '#ffffff', (c) => tableMutate('hcolor', (t) => t.headerColor = c)),
+    o.zebra ? colorInput(o.zebra, (c) => tableMutate('zcolor', (t) => t.zebra = c)) : null,
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Border' }),
+    colorInput(o.borderColor || '#5a3d2b', (c) => tableMutate('bcolor', (t) => t.borderColor = c)),
+    num('W', o.borderWidth || 0, (v) => tableMutate('bwidth', (t) => t.borderWidth = Math.max(0, v)), { min: 0, step: 0.5 }),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Font' }),
+    select(['Georgia, serif', 'system-ui, sans-serif', '"Courier New", monospace', '"Times New Roman", serif'], o.fontFamily, (v) => tableMutate('font', (t) => t.fontFamily = v)),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    num('Size', o.size, (v) => tableMutate('size', (t) => t.size = Math.max(4, v)), { step: 0.5, min: 4 }),
+    num('Pad', o.padding || 5, (v) => tableMutate('pad', (t) => t.padding = Math.max(0, v)), { min: 0 }),
+    el('label', { text: 'Align' }),
+    select(['left', 'center', 'right'], o.align, (v) => tableMutate('align', (t) => t.align = v)),
+  ]));
+
+  // roll-table helpers
+  kids.push(el('div', { class: 'muted', text: 'Roll table helpers' }));
+  const dice = [4, 6, 8, 10, 12, 20, 100];
+  const dieRow = el('div', { class: 'btnrow' }, dice.map((d) =>
+    el('button', { class: 'mini', title: `Make a d${d} table (fill 1..${d})`, onclick: () => fillDice(d) }, `d${d}`)));
+  kids.push(dieRow);
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { onclick: () => fillSequential(), title: 'Number the first column 1..N for the current rows' }, 'Number 1–N'),
+    el('button', { class: 'on', onclick: rollOnTable, title: 'Roll and highlight a row' }, '🎲 Roll'),
+    el('button', { onclick: clearRoll }, 'Clear'),
+  ]));
+  const roll = store.ui.tableRoll;
+  if (roll && roll.tableId === o.id && roll.value != null) {
+    const cell = o.rows[roll.row] ? (o.rows[roll.row][1] ?? o.rows[roll.row][0] ?? '') : '';
+    kids.push(el('div', { class: 'muted', html: `Rolled <b style="color:#2f81f7">${roll.value}</b> → ${escapeHtml(String(cell)).slice(0, 60)}` }));
+  }
+  kids.push(el('div', { class: 'muted', text: 'Double-click a cell to edit it.' }));
+  return section('table', 'Table', kids);
+
+  function fillDice(d) {
+    tableMutate('dice', (t) => {
+      const start = t.headerRow ? 1 : 0;
+      const cols = Math.max(1, ...t.rows.map((r) => r.length));
+      const header = t.headerRow ? t.rows[0] : null;
+      const newRows = [];
+      if (header) newRows.push(header);
+      for (let i = 1; i <= d; i++) {
+        const existing = t.rows[start + (i - 1)];
+        const row = Array.from({ length: cols }, (_, c) => (existing && existing[c] != null && c > 0) ? existing[c] : '');
+        row[0] = String(i);
+        newRows.push(row);
+      }
+      t.rows = newRows;
+    });
+  }
+  function fillSequential() {
+    tableMutate('number', (t) => {
+      const start = t.headerRow ? 1 : 0;
+      for (let i = start; i < t.rows.length; i++) t.rows[i][0] = String(i - start + 1);
+    });
+  }
+}
+
+// Parse a die-range cell like "3", "6-14", "15–20" → {min,max}.
+function parseRange(s) {
+  const m = String(s).match(/(\d+)\s*[–-]\s*(\d+)/);
+  if (m) return { min: +m[1], max: +m[2] };
+  const n = String(s).match(/\d+/);
+  if (n) return { min: +n[0], max: +n[0] };
+  return null;
+}
+function rollOnTable() {
+  const o = selectedObjects().find((s) => s.type === 'table');
+  if (!o) return;
+  const start = o.headerRow ? 1 : 0;
+  const ranges = [];
+  let lo = Infinity, hi = -Infinity;
+  for (let i = start; i < o.rows.length; i++) {
+    const r = parseRange(o.rows[i][0]);
+    if (r) { ranges.push({ i, ...r }); lo = Math.min(lo, r.min); hi = Math.max(hi, r.max); }
+  }
+  let value, row;
+  if (ranges.length) {
+    value = lo + Math.floor((hi - lo + 1) * pseudoRandom());
+    const hit = ranges.find((r) => value >= r.min && value <= r.max);
+    row = hit ? hit.i : start;
+  } else {
+    const n = o.rows.length - start;
+    row = start + Math.floor(n * pseudoRandom());
+    value = row - start + 1;
+  }
+  store.ui.tableRoll = { tableId: o.id, row, value };
+  emit();
+}
+function clearRoll() { store.ui.tableRoll = null; emit(); }
+// Date.now/Math.random are fine here (UI only, never inside a workflow script).
+function pseudoRandom() { return Math.random(); }
+function escapeHtml(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ---- Cross-references & hyperlinks ---- */
+function buildLinks() {
+  const sel = selectedObjects();
+  const o = sel[0];
+  if (!o) return section('links', 'Cross-References & Links', [el('div', { class: 'empty', text: 'Select an object to link it or make it a reference target.' })]);
+  const kids = [];
+  const link = o.link || { type: 'none', target: '' };
+
+  kids.push(el('div', { class: 'muted', text: 'This object links to…' }));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Type' }),
+    select(['none', 'page', 'anchor', 'url'], link.type, (v) => setLink((l) => { l.type = v; l.target = ''; })),
+  ]));
+
+  if (link.type === 'page') {
+    kids.push(el('div', { class: 'row' }, [
+      el('label', { text: 'Page' }),
+      el('input', { type: 'number', min: 1, max: store.doc.pages.length, value: link.target || 1,
+        onchange: (e) => setLink((l) => l.target = String(Math.max(1, Math.min(store.doc.pages.length, parseInt(e.target.value) || 1)))) }),
+    ]));
+  } else if (link.type === 'anchor') {
+    const anchors = anchorList();
+    kids.push(el('div', { class: 'row' }, [
+      el('label', { text: 'Target' }),
+      anchors.length
+        ? select(anchors, link.target || anchors[0], (v) => setLink((l) => l.target = v))
+        : el('span', { class: 'muted', text: 'No anchors yet — name one below or on another object.' }),
+    ]));
+  } else if (link.type === 'url') {
+    kids.push(el('div', { class: 'row' }, [
+      el('input', { class: 'grow', type: 'text', value: link.target || '', placeholder: 'https://…',
+        style: 'width:100%', onchange: (e) => setLink((l) => l.target = e.target.value) }),
+    ]));
+  }
+  if (o.link) {
+    kids.push(el('div', { class: 'btnrow' }, [
+      el('button', { class: 'on', onclick: () => followLink(o) }, '↪ Follow'),
+      el('button', { onclick: () => { begin('unlink'); o.link = null; commit('unlink'); } }, 'Remove link'),
+    ]));
+  }
+
+  kids.push(el('div', { class: 'muted', text: 'This object as a reference target (anchor)' }));
+  kids.push(el('div', { class: 'row' }, [
+    el('input', { class: 'grow', type: 'text', value: o.anchorName || '', placeholder: 'e.g. combat-rules',
+      style: 'width:100%', onchange: (e) => { begin('anchor'); o.anchorName = e.target.value.trim(); commit('anchor'); } }),
+  ]));
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { onclick: () => { begin('anchor'); ensureAnchorName(o); commit('anchor'); } }, 'Auto-name anchor'),
+  ]));
+  kids.push(el('div', { class: 'muted', html: 'In text, write <span class="kbd-tag">{page:combat-rules}</span> to insert that anchor\'s live page number. Ctrl/Cmd-click a linked object to follow it.' }));
+  return section('links', 'Cross-References & Links', kids);
+
+  function setLink(mutator) {
+    begin('set link');
+    const l = o.link ? { ...o.link } : { type: 'none', target: '' };
+    mutator(l);
+    o.link = l.type === 'none' ? null : l;
+    commit('set link');
+  }
+}
+
+function anchorList() {
+  const set = new Set();
+  for (const p of store.doc.pages) for (const ob of p.objects) if (ob.anchorName) set.add(ob.anchorName);
+  return [...set];
+}
+
 /* ===================== Status bar ===================== */
 export function renderStatusbar(cursorDoc) {
   const host = document.getElementById('statusbar');
@@ -569,7 +785,8 @@ function duplicatePage() {
   for (const page of spread.pages) {
     const copy = JSON.parse(JSON.stringify(page));
     copy.id = uid('P');
-    copy.objects.forEach((o) => { o.id = uid('o'); o.threadNext = null; o.threadPrev = null; });
+    // new ids; drop thread links and anchor names so the copy can't collide with the original
+    copy.objects.forEach((o) => { o.id = uid('o'); o.threadNext = null; o.threadPrev = null; o.anchorName = ''; });
     const i = store.doc.pages.indexOf(page);
     store.doc.pages.splice(i + 1, 0, copy);
   }

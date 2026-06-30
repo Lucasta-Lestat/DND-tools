@@ -1,7 +1,7 @@
 // App bootstrap: build the default document, wire panels, canvas, rulers,
 // keyboard shortcuts, menu actions, and the render loop.
 import { store, subscribe, emit, begin, commit, findObject, undo, redo, resetHistory, getSpreads } from './store.js';
-import { newDocument, baseText, uid } from './model.js';
+import { newDocument, baseText, makeTable, uid } from './model.js';
 import { PERSONAS, TOOLS } from './personas.js';
 import {
   resizeCanvas, drawScene, fitView, getView, screenToDoc,
@@ -139,6 +139,32 @@ function seedDocument() {
     text: SAMPLE_BODY,
   });
   page.objects.push(title, body);
+
+  // Page 2: a roll table, anchored so the body can cross-reference its page.
+  const p2 = doc.pages[1];
+  const tableHead = baseText(layerId);
+  Object.assign(tableHead, {
+    x: 54, y: 70, w: doc.settings.pageWidth - 94, h: 40,
+    text: '## Wandering Encounters', size: 15, color: '#7a2d1f', bold: true,
+    fontFamily: 'Georgia, serif',
+  });
+  const table = makeTable(layerId);
+  Object.assign(table, {
+    x: 54, y: 110, w: doc.settings.pageWidth - 94,
+    anchorName: 'wandering-table',
+    colWeights: [1, 4],
+    rows: [
+      ['d8', 'You encounter…'],
+      ['1–2', 'A blind cartographer reciting a map aloud'],
+      ['3–4', 'Knotsmen collecting a debt of stories'],
+      ['5', 'A bloom of funginids sharing poisoned bread'],
+      ['6', 'A river of pale eels flowing uphill'],
+      ['7', 'The echo of a city that has not been built yet'],
+      ['8', 'Something that has been following you for a day'],
+    ],
+  });
+  table.h = 7 * (table.size * table.lineHeight + table.padding * 2);
+  p2.objects.push(tableHead, table);
   return doc;
 }
 
@@ -155,6 +181,8 @@ A guild of rope-priests who believe the world is a single vast knot slowly tying
 ### Funginids
 
 Not one creature but a parliament of spores wearing the shape of a person. They are unfailingly polite. They are always hungry. Do not eat their bread.
+
+When the dark grows restless, roll on the Wandering Encounters table (see page {page:wandering-table}). The page number in that reference updates itself if the table ever moves.
 
 Start a new paragraph and it flows down the first column, then into the second, and onward into any frame you link with the Link Text Frames tool. This is the same threaded text flow you would use to lay out a chapter across many pages.`;
 

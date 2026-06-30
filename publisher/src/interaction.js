@@ -1,11 +1,12 @@
 // Pointer interaction: select, move, resize, rotate, create objects,
 // thread text frames, edit text, and zoom/pan.
-import { store, begin, commit, emit, spreadObjects } from './store.js';
+import { store, begin, commit, emit, spreadObjects, getSpreads } from './store.js';
 import { TOOLS } from './personas.js';
-import { baseText, makeShape, makeImage } from './model.js';
+import { baseText, makeShape, makeImage, makeTable } from './model.js';
 import {
   screenToDoc, getPlacements, placementForPage, objectScreenCorners,
-  hitTest, findOnSpread, drawScene, getView,
+  hitTest, findOnSpread, drawScene, getView, fitView,
+  computeTableLayout, tableCellAt, tableContentHeight,
 } from './renderer.js';
 
 const scene = document.getElementById('scene');
@@ -13,6 +14,7 @@ const editor = document.getElementById('text-editor');
 
 let drag = null;        // active gesture
 let threadPending = null; // frame id awaiting a thread target
+let linkPending = null;   // object id awaiting a cross-reference target
 let onChange = () => {};
 
 const HPOS = { nw: [-1, -1], n: [0, -1], ne: [1, -1], e: [1, 0], se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0] };
@@ -98,6 +100,17 @@ function onPointerDown(e) {
     return;
   }
 
+  // Hyperlink / cross-reference tool: click source object, then the target.
+  if (toolId === 'link') {
+    const hit = topmostAt(p.x, p.y);
+    if (hit) {
+      if (!linkPending) { linkPending = hit.obj.id; store.ui.selection = [hit.obj.id]; onChange(); }
+      else if (linkPending !== hit.obj.id) { createCrossRef(linkPending, hit.obj.id); linkPending = null; }
+    } else { linkPending = null; }
+    drawScene();
+    return;
+  }
+
   // Create tools
   if (tool && tool.create) {
     const docPt = screenToDoc(p.x, p.y);
@@ -109,14 +122,22 @@ function onPointerDown(e) {
     let obj;
     if (tool.create === 'text') obj = baseText(layerId);
     else if (tool.create === 'image') obj = makeImage(layerId, null, 0, 0);
+    else if (tool.create === 'table') obj = makeTable(layerId);
     else obj = makeShape(tool.create, layerId, defaultFill(tool.create));
-    obj.x = loc.x; obj.y = loc.y; obj.w = 1; obj.h = 1;
+    obj.x = loc.x; obj.y = loc.y;
+    if (tool.create !== 'table') { obj.w = 1; obj.h = 1; }
     pl.page.objects.push(obj);
     store.ui.selection = [obj.id];
     drag = { mode: 'create', obj, pl, origin: loc, tool: tool.create };
     scene.addEventListener('pointermove', onPointerDrag);
     scene.addEventListener('pointerup', onPointerUp, { once: true });
     return;
+  }
+
+  // Ctrl/Cmd-click a linked object to follow its hyperlink / cross-reference.
+  if (toolId === 'move' && (e.ctrlKey || e.metaKey)) {
+    const hit = topmostAt(p.x, p.y);
+    if (hit && hit.obj.link) { followLink(hit.obj); return; }
   }
 
   // Move / select / transform
@@ -180,7 +201,9 @@ function onPointerDrag(e) {
     let x = Math.min(loc.x, drag.origin.x), y = Math.min(loc.y, drag.origin.y);
     let w = Math.abs(loc.x - drag.origin.x), h = Math.abs(loc.y - drag.origin.y);
     if (e.shiftKey && drag.tool !== 'line') { const s = Math.max(w, h); w = s; h = s; }
-    o.x = x; o.y = y; o.w = Math.max(w, 1); o.h = Math.max(h, 1);
+    if (drag.tool === 'table') { // height is content-driven
+      o.x = Math.min(loc.x, drag.origin.x); o.y = drag.origin.y; o.w = Math.max(w, 60); o.h = tableContentHeight(o);
+    } else { o.x = x; o.y = y; o.w = Math.max(w, 1); o.h = Math.max(h, 1); }
     drawScene();
     return;
   }
@@ -204,7 +227,10 @@ function onPointerUp(e) {
   if (!drag) return;
   if (drag.mode === 'create') {
     const o = drag.obj;
-    if (o.w < 4 && o.h < 4) { // click without drag -> default size
+    if (drag.tool === 'table') {
+      if (o.w < 40) o.w = 240;
+      o.h = tableContentHeight(o);
+    } else if (o.w < 4 && o.h < 4) { // click without drag -> default size
       if (drag.tool === 'text') { o.w = 200; o.h = 80; }
       else if (drag.tool === 'line') { o.w = 120; o.h = 0.5; }
       else { o.w = 120; o.h = 120; }
@@ -214,7 +240,10 @@ function onPointerUp(e) {
     if (drag.tool === 'image') document.getElementById('file-image').click();
   } else if (drag.mode === 'move') {
     if (drag.moved) commit('move'); else emit();
-  } else if (drag.mode === 'resize') { commit('resize'); }
+  } else if (drag.mode === 'resize') {
+    if (drag.obj.type === 'table') drag.obj.h = tableContentHeight(drag.obj); // re-fit after width change
+    commit('resize');
+  }
   else if (drag.mode === 'rotate') { commit('rotate'); }
   else if (drag.mode === 'marquee') {
     selectInMarquee(drag.start, drag.current || drag.start, drag.add);
@@ -328,16 +357,72 @@ function linkFrames(aId, bId) {
   commit('thread');
 }
 
+/* ---------- cross-references / hyperlinks ---------- */
+function allObjects() { return [...store.doc.pages, ...store.doc.masters].flatMap((c) => c.objects); }
+
+function slugifyAnchor(s) {
+  return (s || 'anchor').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'anchor';
+}
+
+// Ensure an object has a unique anchor name and return it.
+export function ensureAnchorName(obj) {
+  if (obj.anchorName) return obj.anchorName;
+  let base = slugifyAnchor(obj.type === 'text' ? (obj.text || '').replace(/^#+\s*/, '') : obj.type);
+  const taken = new Set(allObjects().map((o) => o.anchorName).filter(Boolean));
+  let name = base, i = 2;
+  while (taken.has(name)) name = `${base}-${i++}`;
+  obj.anchorName = name;
+  return name;
+}
+
+// Link source object → target object via a named anchor.
+function createCrossRef(srcId, dstId) {
+  begin('cross-reference');
+  const objs = allObjects();
+  const src = objs.find((o) => o.id === srcId), dst = objs.find((o) => o.id === dstId);
+  if (src && dst) {
+    const name = ensureAnchorName(dst);
+    src.link = { type: 'anchor', target: name };
+  }
+  store.ui.selection = src ? [src.id] : [];
+  commit('cross-reference');
+}
+
+// Navigate the editor to an object's link target.
+export function followLink(obj) {
+  const link = obj.link;
+  if (!link) return;
+  if (link.type === 'url') { window.open(link.target, '_blank', 'noopener'); return; }
+  let pageIndex = -1, targetId = null;
+  if (link.type === 'anchor') {
+    const t = allObjects().find((o) => o.anchorName === link.target && store.doc.pages.some((p) => p.objects.includes(o)));
+    if (t) { targetId = t.id; pageIndex = store.doc.pages.findIndex((p) => p.objects.includes(t)); }
+  } else if (link.type === 'page') {
+    pageIndex = (parseInt(link.target, 10) || 1) - 1;
+  }
+  if (pageIndex < 0 || pageIndex >= store.doc.pages.length) return;
+  if (store.ui.masterEdit) store.ui.masterEdit = null;
+  const page = store.doc.pages[pageIndex];
+  const spreads = getSpreads();
+  const idx = spreads.findIndex((sp) => sp.pages.includes(page));
+  if (idx >= 0) store.ui.spreadIndex = idx;
+  store.ui.selection = targetId ? [targetId] : [];
+  fitView();
+  emit();
+}
+
 /* ---------- text editing ---------- */
 export function startTextEdit(id) {
   const found = findOnSpread(id);
   if (!found || found.obj.type !== 'text' || found.obj.field) return;
   const { obj, pl } = found;
   store.ui.editingTextId = id;
+  store.ui.editingCell = null;
   store.ui.selection = [id];
   positionEditor(obj, pl);
   editor.value = obj.threadPrev ? '(continued story — edit from the first frame)' : (obj.text || '');
   editor.readOnly = !!obj.threadPrev;
+  if (!obj.threadPrev) begin('edit text'); // snapshot BEFORE live edits so undo works
   editor.style.display = 'block';
   editor.focus();
   if (!obj.threadPrev) editor.select();
@@ -363,9 +448,48 @@ function positionEditor(obj, pl) {
   editor.style.textAlign = obj.align === 'justify' ? 'left' : obj.align;
 }
 
+// Edit a single table cell, reusing the floating editor.
+export function startCellEdit(obj, pl, cell) {
+  store.ui.editingTextId = obj.id;
+  store.ui.editingCell = { r: cell.r, c: cell.c };
+  store.ui.selection = [obj.id];
+  begin('edit cell'); // snapshot BEFORE live edits so undo works
+  positionEditorForCell(obj, pl, cell);
+  editor.value = obj.rows[cell.r] && obj.rows[cell.r][cell.c] != null ? obj.rows[cell.r][cell.c] : '';
+  editor.readOnly = false;
+  editor.style.display = 'block';
+  editor.focus();
+  editor.select();
+  drawScene();
+  onChange();
+}
+
+function positionEditorForCell(obj, pl, cell) {
+  const z = store.ui.zoom;
+  const sx = store.ui.pan.x + (pl.ox + obj.x + cell.x) * z;
+  const sy = store.ui.pan.y + (pl.oy + obj.y + cell.y) * z;
+  const isHeader = cell.r === 0 && obj.headerRow;
+  editor.style.left = sx + 'px';
+  editor.style.top = sy + 'px';
+  editor.style.width = cell.w * z + 'px';
+  editor.style.height = cell.h * z + 'px';
+  editor.style.padding = (obj.padding || 5) * z + 'px';
+  editor.style.font = `${isHeader ? '700 ' : '400 '}${obj.size * z}px ${obj.fontFamily}`;
+  editor.style.lineHeight = obj.lineHeight || 1.25;
+  editor.style.color = isHeader ? (obj.headerColor || '#fff') : obj.color;
+  editor.style.background = isHeader ? (obj.headerFill || '#444') : 'rgba(255,255,255,.96)';
+  editor.style.transform = 'rotate(0deg)';
+  editor.style.textAlign = obj.align === 'justify' ? 'left' : (obj.align || 'left');
+}
+
 function onEditorInput() {
   const id = store.ui.editingTextId; if (!id) return;
   const f = findOnSpread(id); if (!f || editor.readOnly) return;
+  if (store.ui.editingCell) {
+    const { r, c } = store.ui.editingCell;
+    if (f.obj.rows[r]) { f.obj.rows[r][c] = editor.value; f.obj.h = tableContentHeight(f.obj); drawScene(); }
+    return;
+  }
   f.obj.text = editor.value;
 }
 
@@ -378,17 +502,41 @@ export function commitTextEdit() {
   const id = store.ui.editingTextId;
   if (!id) return;
   const f = findOnSpread(id);
+  const cell = store.ui.editingCell;
   store.ui.editingTextId = null;
+  store.ui.editingCell = null;
   editor.style.display = 'none';
-  if (f && !editor.readOnly) { begin('edit text'); f.obj.text = editor.value; commit('edit text'); }
+  editor.style.background = 'rgba(255,255,255,.96)';
+  if (f && cell) {
+    // begin() already captured the pre-edit snapshot in startCellEdit
+    if (f.obj.rows[cell.r]) f.obj.rows[cell.r][cell.c] = editor.value;
+    f.obj.h = tableContentHeight(f.obj);
+    commit('edit cell');
+  } else if (f && !editor.readOnly) { f.obj.text = editor.value; commit('edit text'); }
   else { drawScene(); onChange(); }
 }
 
 function onDblClick(e) {
   const p = localPoint(e);
   const hit = topmostAt(p.x, p.y);
-  if (hit && hit.obj.type === 'text' && !hit.obj.field) startTextEdit(hit.obj.id);
-  else if (hit && hit.obj.type === 'image') document.getElementById('file-image').click();
+  if (!hit) return;
+  if (hit.obj.type === 'text' && !hit.obj.field) startTextEdit(hit.obj.id);
+  else if (hit.obj.type === 'table') {
+    const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+    const cell = tableCellAt(hit.obj, local.x, local.y);
+    if (cell) startCellEdit(hit.obj, hit.pl, cell);
+  } else if (hit.obj.type === 'image') document.getElementById('file-image').click();
+}
+
+// Screen point → object-local point (accounts for rotation).
+function objectLocalPoint(obj, pl, sx, sy) {
+  const p = screenToDoc(sx, sy);
+  const cx = pl.ox + obj.x + obj.w / 2, cy = pl.oy + obj.y + obj.h / 2;
+  const a = -(obj.rotation || 0) * Math.PI / 180;
+  const dx = p.x - cx, dy = p.y - cy;
+  const lx = dx * Math.cos(a) - dy * Math.sin(a);
+  const ly = dx * Math.sin(a) + dy * Math.cos(a);
+  return { x: lx + obj.w / 2, y: ly + obj.h / 2 };
 }
 
 /* ---------- hover cursor ---------- */
@@ -438,5 +586,12 @@ export function repositionEditorIfOpen() {
   const id = store.ui.editingTextId;
   if (!id) return;
   const f = findOnSpread(id);
-  if (f) positionEditor(f.obj, f.pl);
+  if (!f) return;
+  if (store.ui.editingCell) {
+    const L = computeTableLayout(f.obj);
+    const { r, c } = store.ui.editingCell;
+    if (r < L.rowY.length) positionEditorForCell(f.obj, f.pl, { r, c, x: L.colX[c], y: L.rowY[r], w: L.colW[c], h: L.rowH[r] });
+  } else {
+    positionEditor(f.obj, f.pl);
+  }
 }

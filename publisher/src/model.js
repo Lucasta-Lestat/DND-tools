@@ -108,6 +108,8 @@ function baseObject(layerId) {
     opacity: 1,
     locked: false,
     name: '',
+    link: null,        // { type:'page'|'anchor'|'url', target } — cross-reference / hyperlink
+    anchorName: '',     // named destination this object can be linked to / referenced by
   };
 }
 
@@ -158,5 +160,36 @@ export function makeImage(layerId, src, naturalW, naturalH) {
     stroke: null,
     strokeWidth: 0,
     radius: 0,
+  };
+}
+
+// A data table — ideal for random/roll tables (e.g. d20 → result).
+export function makeTable(layerId) {
+  return {
+    ...baseObject(layerId),
+    type: 'table',
+    w: 240, h: 120,
+    rows: [
+      ['d20', 'Result'],
+      ['1–5', 'Nothing of note'],
+      ['6–14', 'A wandering encounter'],
+      ['15–20', 'A strange discovery'],
+    ],
+    colWeights: [1, 3],     // relative column widths
+    headerRow: true,
+    fontFamily: 'Georgia, serif',
+    size: 9.5,
+    color: '#222222',
+    align: 'left',
+    lineHeight: 1.25,
+    padding: 5,
+    borderColor: '#5a3d2b',
+    borderWidth: 1,
+    headerFill: '#5a3d2b',
+    headerColor: '#ffffff',
+    zebra: '#f0e6d2',        // alternating row tint, or null
+    fill: '#ffffff',
+    stroke: null,
+    strokeWidth: 0,
   };
 }
