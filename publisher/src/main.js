@@ -1,11 +1,11 @@
 // App bootstrap: build the default document, wire panels, canvas, rulers,
 // keyboard shortcuts, menu actions, and the render loop.
 import { store, subscribe, emit, begin, commit, findObject, undo, redo, resetHistory, getSpreads } from './store.js';
-import { newDocument, baseText, makeTable, makeToc, uid } from './model.js';
-import { collectHeadings } from './textlayout.js';
+import { newDocument, baseText, makeTable, makeToc, makeIndex, uid } from './model.js';
+import { collectHeadings, collectIndex } from './textlayout.js';
 import { PERSONAS, TOOLS } from './personas.js';
 import {
-  resizeCanvas, drawScene, fitView, getView, screenToDoc, tocContentHeight,
+  resizeCanvas, drawScene, fitView, getView, screenToDoc, tocContentHeight, indexContentHeight,
 } from './renderer.js';
 import {
   initInteraction, repositionEditorIfOpen, commitTextEdit, startTextEdit,
@@ -165,6 +165,7 @@ function seedDocument() {
     ],
   });
   table.h = 7 * (table.size * table.lineHeight + table.padding * 2);
+  table.indexTerms = ['Wandering Encounters', 'encounters'];
   p2.objects.push(tableHead, table);
 
   // Front matter: a generated table of contents on its own page (page 1),
@@ -177,22 +178,31 @@ function seedDocument() {
   toc.entries = heads.filter((h) => toc.levels.includes(h.level)).map((h) => ({ text: h.text, level: h.level, page: h.page }));
   toc.h = tocContentHeight(toc);
   tocPage.objects.push(toc);
+
+  // Back matter: a generated index on the final page.
+  const indexPage = { id: uid('P'), masterId: doc.masters[0].id, showMaster: true, objects: [] };
+  doc.pages.push(indexPage);
+  const index = makeIndex(layerId);
+  Object.assign(index, { x: 54, y: 80, w: doc.settings.pageWidth - 94, columns: 2 });
+  index.entries = collectIndex(doc);
+  index.h = indexContentHeight(index);
+  indexPage.objects.push(index);
   return doc;
 }
 
 const SAMPLE_BODY = `## On the Dark
 
-Far beneath the roots of mountains the Dark is not an absence of light but a presence of its own. It presses. It listens. Those who travel here learn quickly that a torch is a confession, and that silence is a currency more dear than gold.
+Far beneath the roots of mountains the Dark{index:Dark, the} is not an absence of light but a presence of its own. It presses. It listens. Those who travel here learn quickly that a torch is a confession, and that silence is a currency more dear than gold.
 
 This guide collects what little is known of the peoples and perils of the under-realms. Treat every entry as rumour sharpened to the edge of fact.
 
 ### The Knotsmen
 
-A guild of rope-priests who believe the world is a single vast knot slowly tying itself tighter. They map the tunnels in cord and memory, and will trade safe passage for a true story you have never told anyone.
+A guild of rope-priests{index:Knotsmen}{index:rope-priests} who believe the world is a single vast knot slowly tying itself tighter. They map the tunnels in cord and memory, and will trade safe passage for a true story you have never told anyone.
 
 ### Funginids
 
-Not one creature but a parliament of spores wearing the shape of a person. They are unfailingly polite. They are always hungry. Do not eat their bread.
+Not one creature but a parliament of spores{index:Funginids}{index:spores} wearing the shape of a person. They are unfailingly polite. They are always hungry. Do not eat their bread.
 
 When the dark grows restless, roll on the Wandering Encounters table (see page {page:wandering-table}). The page number in that reference updates itself if the table ever moves.
 

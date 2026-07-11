@@ -27,7 +27,7 @@ panels while editing the *same* pages:
 
 | Persona | Focus | Tools | Panels |
 | --- | --- | --- | --- |
-| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, **Contents**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Table of Contents, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
+| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, **Contents**, **Index**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Table of Contents, Index, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
 | **Designer** | Vector drawing | Move, Node, Rect, Ellipse, Line, Pen, Text | Transform, **Arrange & Align**, Layers, Color |
 | **Photo** | Raster images | Move, Picture Frame, Crop, Adjust | Transform, **Image Adjustments**, Layers |
 
@@ -54,11 +54,21 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 ![Roll table with the Table panel](docs/tables.png)
 
+- **Index** — a generated back-of-book **Index**. Mark terms inline in text with
+  invisible **`{index:Term}`** tokens, or tag any object with index terms in the
+  Cross-References & Links panel. Generate an alphabetised, letter-grouped,
+  multi-column index with merged page numbers ("Knotsmen, 4, 7, 12"). Double-click
+  an entry to jump to its first page; entries are clickable in the PDF.
+
+![Generated back-of-book index](docs/index.png)
+
 - **Tables** — purpose-built for **roll tables**. Header row, zebra striping,
   borders, per-column widths, and double-click cell editing with auto-fit row
   heights. One-click **dice presets** (d4–d100) fill the first column `1..N`, and
   a **🎲 Roll** button rolls against the first-column ranges (e.g. `6–14`) and
-  highlights the result.
+  highlights the result. **Long tables flow across pages**: link one table into
+  another with the chain tool and rows paginate automatically with the **header
+  row repeated** on every frame.
 - **Hyperlinks & cross-references** — give any object a link to a **page**, a
   named **anchor**, or an external **URL**, and Ctrl/Cmd-click (or the *↪ Go*
   button) to follow it. Inline **`{page:anchor-name}`** tokens in text resolve to
@@ -83,7 +93,7 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 | | |
 | --- | --- |
-| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
+| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
 | `1` / `2` / `3` | Publisher / Designer / Photo persona |
 | `Ctrl/Cmd Z` · `Ctrl/Cmd Shift Z` | undo / redo |
 | `Ctrl/Cmd S` · `Ctrl/Cmd O` | save / open |
@@ -123,6 +133,25 @@ Switch with the buttons or keys **1 / 2 / 3**.
    Refresh**. Double-click any entry to jump to its page; entries become clickable
    links in the exported PDF.
 
+## Index, quickly
+
+1. Mark terms where they matter: type `{index:Knotsmen}` right after the word in a
+   text frame (the token is invisible in the output), or select any object and add
+   comma-separated terms in the **Cross-References & Links** panel.
+2. Pick the **Index** tool (`X`) and drag out a block on a back page.
+3. In the **Index** panel set columns and toggle **Group A–Z**, then click
+   **Generate / Refresh**. Terms are alphabetised with merged page numbers.
+4. Double-click an entry to jump to its first page.
+
+## Long tables across pages, quickly
+
+1. Draw the table and fill in the rows (it can be taller than the page).
+2. Draw a second, empty table where the overflow should continue (e.g. the next
+   page), sized to the space you want it to fill.
+3. Pick the **Link Text Frames** tool (`K`) and click the first table, then the
+   second. Rows now flow into the second frame and the **header row repeats** at
+   the top of it. Chain as many frames as you need.
+
 ## Cross-references, quickly
 
 - **Auto page numbers in text:** anchor the target object (select it → *Cross-
@@ -143,8 +172,8 @@ Plain ES modules, no framework:
 | `src/store.js` | App state, spreads/derived selectors, undo-redo history |
 | `src/model.js` | Document/object factories, presets, default styles |
 | `src/personas.js` | StudioLink personas and tool definitions |
-| `src/textlayout.js` | Wrapping, columns, paragraph styles, threading, cross-reference tokens, heading collection |
-| `src/renderer.js` | Canvas drawing, table & TOC layout, hit-testing, selection chrome |
+| `src/textlayout.js` | Wrapping, columns, paragraph styles, threading, cross-reference tokens, heading & index collection |
+| `src/renderer.js` | Canvas drawing, table pagination, TOC/index layout, hit-testing, selection chrome |
 | `src/interaction.js` | Pointer tools: select/move/resize/rotate/create/thread/cell-edit/link |
 | `src/panels.js` | Persona switcher, tool strip, context bar, studio panels (incl. Table & Links) |
 | `src/io.js` | Save/open and PNG/SVG/PDF export (with clickable PDF links) |

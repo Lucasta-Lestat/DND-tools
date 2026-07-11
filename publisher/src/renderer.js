@@ -270,6 +270,10 @@ function drawObject(obj, pl, fromMaster) {
       if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, r.w, r.h); }
       if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, r.w, r.h); }
       drawToc(obj);
+    } else if (obj.type === 'index') {
+      if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, r.w, r.h); }
+      if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, r.w, r.h); }
+      drawIndex(obj);
     }
   });
 }
@@ -306,61 +310,143 @@ export function computeTableLayout(obj) {
 // Natural content height — used to keep obj.h in sync with the table.
 export function tableContentHeight(obj) { return computeTableLayout(obj).totalH; }
 
-// Which cell sits under an object-local point (or null).
+/* Table threading: rows live on the head; linked frames show later rows with a
+   repeated header, so a long table flows across pages. */
+
+export function tableChainOf(obj) {
+  const all = [...store.doc.pages, ...store.doc.masters].flatMap((c) => c.objects);
+  const byId = new Map(all.map((o) => [o.id, o]));
+  let head = obj;
+  while (head.threadPrev && byId.get(head.threadPrev)) head = byId.get(head.threadPrev);
+  const chain = [head]; let cur = head;
+  while (cur.threadNext && byId.get(cur.threadNext) && !chain.includes(byId.get(cur.threadNext))) {
+    cur = byId.get(cur.threadNext); chain.push(cur);
+  }
+  return chain;
+}
+
+function tableColumns(width, head) {
+  const ncols = Math.max(1, ...head.rows.map((r) => r.length));
+  const weights = (head.colWeights && head.colWeights.length === ncols) ? head.colWeights : Array.from({ length: ncols }, () => 1);
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  const colW = weights.map((w) => (width * w) / total);
+  const colX = []; let x = 0; for (const w of colW) { colX.push(x); x += w; }
+  return { ncols, colW, colX };
+}
+
+function tableRowHeight(cells, colW, head, isHeader) {
+  const pad = head.padding ?? 5;
+  const lineH = head.size * (head.lineHeight || 1.2);
+  const style = { fontFamily: head.fontFamily, size: head.size, bold: isHeader, italic: false, tracking: 0 };
+  let maxLines = 1;
+  for (let c = 0; c < colW.length; c++) {
+    const t = cells && cells[c] != null ? cells[c] : '';
+    maxLines = Math.max(maxLines, wrapText(t, style, Math.max(8, colW[c] - pad * 2)).length);
+  }
+  return maxLines * lineH + pad * 2;
+}
+
+// Distribute data rows across the chain by each frame's height.
+function paginateChain(chain, head) {
+  const dataRows = head.headerRow ? head.rows.slice(1) : head.rows;
+  const perFrame = chain.map(() => []);
+  let cursor = 0;
+  for (let j = 0; j < chain.length; j++) {
+    const frame = chain[j];
+    const { colW } = tableColumns(frame.w, head);
+    let y = 0;
+    if (head.headerRow) y += tableRowHeight(head.rows[0], colW, head, true);
+    while (cursor < dataRows.length) {
+      const h = tableRowHeight(dataRows[cursor], colW, head, false);
+      if (perFrame[j].length > 0 && y + h > frame.h) break;
+      perFrame[j].push(cursor); y += h; cursor++;
+    }
+  }
+  return { perFrame, overflow: cursor < dataRows.length };
+}
+
+// Visual rows for THIS frame: a (repeated) header plus its slice of data rows.
+export function tableFrameLayout(obj) {
+  const chain = tableChainOf(obj);
+  const head = chain[0];
+  const { ncols, colW, colX } = tableColumns(obj.w, head);
+  const pad = head.padding ?? 5;
+  const lineH = head.size * (head.lineHeight || 1.2);
+  const dataOffset = head.headerRow ? 1 : 0;
+
+  let dataIndices;
+  if (chain.length === 1) {
+    dataIndices = head.rows.slice(dataOffset).map((_, i) => i); // lone table: all rows
+  } else {
+    const { perFrame } = paginateChain(chain, head);
+    dataIndices = perFrame[chain.indexOf(obj)] || [];
+  }
+
+  const visualRows = []; let y = 0;
+  if (head.headerRow) {
+    const h = tableRowHeight(head.rows[0], colW, head, true);
+    visualRows.push({ kind: 'header', globalIndex: 0, cells: head.rows[0], y, h }); y += h;
+  }
+  for (const di of dataIndices) {
+    const globalIndex = di + dataOffset;
+    const cells = head.rows[globalIndex] || [];
+    const h = tableRowHeight(cells, colW, head, false);
+    visualRows.push({ kind: 'data', globalIndex, dataIndex: di, cells, y, h }); y += h;
+  }
+  return { head, ncols, colW, colX, pad, lineH, visualRows, totalH: y };
+}
+
+// Which cell sits under an object-local point. r is the GLOBAL row index on the head.
 export function tableCellAt(obj, lx, ly) {
-  const L = computeTableLayout(obj);
+  const L = tableFrameLayout(obj);
   if (lx < 0 || lx > obj.w || ly < 0 || ly > L.totalH) return null;
   let c = 0; while (c < L.ncols - 1 && lx > L.colX[c + 1]) c++;
-  let r = 0; while (r < L.rowY.length - 1 && ly > L.rowY[r + 1]) r++;
-  if (r >= (obj.rows || []).length) return null;
-  return { r, c, x: L.colX[c], y: L.rowY[r], w: L.colW[c], h: L.rowH[r] };
+  const vr = L.visualRows.find((v) => ly >= v.y && ly <= v.y + v.h);
+  if (!vr) return null;
+  return { r: vr.globalIndex, c, x: L.colX[c], y: vr.y, w: L.colW[c], h: vr.h, headId: L.head.id };
 }
 
 function drawTable(obj) {
-  const L = computeTableLayout(obj);
-  const rows = obj.rows || [];
+  const L = tableFrameLayout(obj);
+  const head = L.head;
   // backgrounds
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
+  for (const vr of L.visualRows) {
     let bg = null;
-    if (isHeader) bg = obj.headerFill;
-    else if (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) bg = obj.zebra;
-    else if (obj.fill) bg = obj.fill;
-    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, L.rowY[r], obj.w, L.rowH[r]); }
+    if (vr.kind === 'header') bg = head.headerFill;
+    else if (head.zebra && (vr.dataIndex % 2 === 1)) bg = head.zebra;
+    else if (head.fill) bg = head.fill;
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, vr.y, obj.w, vr.h); }
   }
-  // roll highlight
+  // roll highlight (roll.row is a global head-row index)
   const roll = store.ui.tableRoll;
-  if (roll && roll.tableId === obj.id && roll.row >= 0 && roll.row < rows.length) {
-    ctx.fillStyle = 'rgba(47,129,247,.28)';
-    ctx.fillRect(0, L.rowY[roll.row], obj.w, L.rowH[roll.row]);
+  if (roll && roll.tableId === head.id) {
+    const vr = L.visualRows.find((v) => v.kind === 'data' && v.globalIndex === roll.row);
+    if (vr) { ctx.fillStyle = 'rgba(47,129,247,.28)'; ctx.fillRect(0, vr.y, obj.w, vr.h); }
   }
   // borders
-  if (obj.borderWidth > 0) {
-    ctx.strokeStyle = obj.borderColor || '#000';
-    ctx.lineWidth = obj.borderWidth;
+  if (head.borderWidth > 0) {
+    ctx.strokeStyle = head.borderColor || '#000';
+    ctx.lineWidth = head.borderWidth;
     ctx.strokeRect(0, 0, obj.w, L.totalH);
     ctx.beginPath();
-    for (let r = 1; r < rows.length; r++) { ctx.moveTo(0, L.rowY[r]); ctx.lineTo(obj.w, L.rowY[r]); }
+    for (let i = 1; i < L.visualRows.length; i++) { ctx.moveTo(0, L.visualRows[i].y); ctx.lineTo(obj.w, L.visualRows[i].y); }
     for (let c = 1; c < L.ncols; c++) { ctx.moveTo(L.colX[c], 0); ctx.lineTo(L.colX[c], L.totalH); }
     ctx.stroke();
   }
   // text
   ctx.textBaseline = 'alphabetic';
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
-    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
-    ctx.font = `${isHeader ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
-    ctx.fillStyle = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+  for (const vr of L.visualRows) {
+    const isHeader = vr.kind === 'header';
+    ctx.font = `${isHeader ? '700 ' : '400 '}${head.size}px ${head.fontFamily}`;
+    ctx.fillStyle = isHeader ? (head.headerColor || '#fff') : (head.color || '#222');
+    const style = { fontFamily: head.fontFamily, size: head.size, bold: isHeader, italic: false, tracking: 0 };
     for (let c = 0; c < L.ncols; c++) {
-      const txt = rows[r][c] != null ? rows[r][c] : '';
-      const cw = L.colW[c] - L.pad * 2;
-      const lines = wrapText(txt, style, Math.max(8, cw));
-      const align = obj.align || 'left';
+      const txt = vr.cells[c] != null ? vr.cells[c] : '';
+      const lines = wrapText(txt, style, Math.max(8, L.colW[c] - L.pad * 2));
+      const align = head.align || 'left';
       ctx.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
       const tx = L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
-      lines.forEach((ln, i) => {
-        ctx.fillText(ln, tx, L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH);
-      });
+      lines.forEach((ln, i) => ctx.fillText(ln, tx, vr.y + L.pad + head.size * 0.82 + i * L.lineH));
     }
   }
   ctx.textAlign = 'left';
@@ -434,6 +520,93 @@ function drawToc(obj) {
     }
   }
   ctx.textAlign = 'left';
+  ctx.restore();
+}
+
+/* ---------- index ---------- */
+
+// Build the multi-column, letter-grouped layout for an index (object-local pts).
+export function computeIndexLayout(obj) {
+  const pad = obj.padding ?? 6;
+  const cols = Math.max(1, obj.columns || 1);
+  const gap = obj.columnGap ?? 16;
+  const colW = (obj.w - pad * 2 - gap * (cols - 1)) / cols;
+  const titleH = obj.title ? obj.titleSize * obj.lineHeight : 0;
+  const lineH = obj.size * obj.lineHeight;
+  const colTop = pad + titleH;
+
+  const flat = [];
+  let cur = null;
+  for (const e of obj.entries || []) {
+    if (obj.groupByLetter) {
+      const L = (e.term[0] || '#').toUpperCase();
+      if (L !== cur) { cur = L; flat.push({ kind: 'letter', letter: L }); }
+    }
+    flat.push({ kind: 'entry', entry: e });
+  }
+
+  // Deterministic, balanced split: equal row counts per column (last may be short).
+  const perCol = Math.max(1, Math.ceil(flat.length / cols));
+  const rows = flat.map((row, i) => {
+    const colIndex = Math.floor(i / perCol);
+    const within = i % perCol;
+    return { ...row, x: pad + colIndex * (colW + gap), y: colTop + within * lineH, h: lineH, colW, colIndex };
+  });
+  return { pad, cols, gap, colW, titleH, lineH, colTop, rows };
+}
+
+export function indexContentHeight(obj) {
+  const cols = Math.max(1, obj.columns || 1);
+  const lineH = obj.size * obj.lineHeight;
+  const titleH = obj.title ? obj.titleSize * obj.lineHeight : 0;
+  const pad = obj.padding ?? 6;
+  let n = 0, cur = null;
+  for (const e of obj.entries || []) {
+    if (obj.groupByLetter) { const L = (e.term[0] || '#').toUpperCase(); if (L !== cur) { cur = L; n++; } }
+    n++;
+  }
+  const perCol = Math.ceil(n / cols) || 1;
+  return pad + titleH + perCol * lineH + pad;
+}
+
+export function indexEntryAt(obj, lx, ly) {
+  const L = computeIndexLayout(obj);
+  for (const row of L.rows) {
+    if (row.kind === 'entry' && lx >= row.x && lx <= row.x + row.colW && ly >= row.y && ly <= row.y + row.h) return { entry: row.entry };
+  }
+  return null;
+}
+
+function clipToWidth(text, width) {
+  if (ctx.measureText(text).width <= width) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > width) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function drawIndex(obj) {
+  const L = computeIndexLayout(obj);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, obj.w, obj.h); ctx.clip();
+  ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  if (obj.title) {
+    ctx.font = `700 ${obj.titleSize}px ${obj.fontFamily}`;
+    ctx.fillStyle = obj.titleColor || obj.color;
+    ctx.fillText(obj.title, L.pad, L.pad + obj.titleSize * 0.82);
+  }
+  for (const row of L.rows) {
+    const baseline = row.y + obj.size * 0.82;
+    if (row.kind === 'letter') {
+      ctx.font = `700 ${obj.size}px ${obj.fontFamily}`;
+      ctx.fillStyle = obj.letterColor || obj.color;
+      ctx.fillText(row.letter, row.x, baseline);
+    } else {
+      ctx.font = `400 ${obj.size}px ${obj.fontFamily}`;
+      ctx.fillStyle = obj.color;
+      const e = row.entry;
+      ctx.fillText(clipToWidth(`${e.term}, ${e.pages.join(', ')}`, row.colW), row.x, baseline);
+    }
+  }
   ctx.restore();
 }
 

@@ -34,17 +34,26 @@ export function frameBaseStyle(frame, doc) {
   };
 }
 
+// Pull {index:Term} marks out of a line; they record an index entry but render
+// nothing. Returns the cleaned text plus the list of terms found.
+function extractIndexTerms(line) {
+  const terms = [];
+  const cleaned = line.replace(/\{index:\s*([^}]+?)\s*\}/g, (_, t) => { terms.push(t.trim()); return ''; });
+  return { cleaned, terms };
+}
+
 function resolveParagraph(rawLine, base, doc) {
-  let text = rawLine, name = null, level = 0;
-  if (rawLine.startsWith('### ')) { name = 'Heading 2'; text = rawLine.slice(4); level = 3; }
-  else if (rawLine.startsWith('## ')) { name = 'Heading 2'; text = rawLine.slice(3); level = 2; }
-  else if (rawLine.startsWith('# ')) { name = 'Heading 1'; text = rawLine.slice(2); level = 1; }
+  const { cleaned, terms } = extractIndexTerms(rawLine);
+  let text = cleaned, name = null, level = 0;
+  if (text.startsWith('### ')) { name = 'Heading 2'; text = text.slice(4); level = 3; }
+  else if (text.startsWith('## ')) { name = 'Heading 2'; text = text.slice(3); level = 2; }
+  else if (text.startsWith('# ')) { name = 'Heading 1'; text = text.slice(2); level = 1; }
   let style = base;
   if (name) {
     const ps = doc.paragraphStyles.find((p) => p.name === name);
     if (ps) style = ps;
   }
-  return { text, style, level };
+  return { text, style, level, indexTerms: terms };
 }
 
 // Map every named anchor to the page number it lives on (real pages only).
@@ -187,6 +196,8 @@ export function layoutStory(chain, doc) {
         };
         // Tag the first line of a heading paragraph so the TOC can find it.
         if (isParaStart && para.level) placed.heading = { level: para.level, text: para.text };
+        // Tag index marks to the first line so the index can find their page.
+        if (isParaStart && para.indexTerms && para.indexTerms.length) placed.indexTerms = para.indexTerms;
         lines.push(placed);
         cursorY += lineH;
 
@@ -251,4 +262,43 @@ export function collectHeadings(doc) {
   }
   out.sort((a, b) => a.page - b.page || a.seq - b.seq);
   return out;
+}
+
+// Collect index marks — inline {index:Term} tokens and object-level indexTerms —
+// merged and alphabetised. Returns [{ term, pages:[…ascending, unique] }].
+export function collectIndex(doc) {
+  const framePage = new Map();
+  doc.pages.forEach((p, i) => p.objects.forEach((o) => framePage.set(o.id, i + 1)));
+
+  const marks = []; // { term, page }
+  const heads = [];
+  for (const p of doc.pages) {
+    for (const o of p.objects) if (o.type === 'text' && !o.threadPrev && !o.field) heads.push(o);
+  }
+  for (const head of heads) {
+    const chain = storyChain(head, doc);
+    const layout = layoutStory(chain, doc);
+    for (const frame of chain) {
+      const page = framePage.get(frame.id);
+      if (page == null) continue;
+      const fl = layout.byFrame[frame.id];
+      if (!fl) continue;
+      for (const line of fl.lines) if (line.indexTerms) for (const t of line.indexTerms) marks.push({ term: t, page });
+    }
+  }
+  // object-level index terms (any object tagged in the Index panel)
+  doc.pages.forEach((p, i) => {
+    const page = i + 1;
+    for (const o of p.objects) if (Array.isArray(o.indexTerms)) for (const t of o.indexTerms) if (t) marks.push({ term: String(t).trim(), page });
+  });
+
+  const map = new Map();
+  for (const { term, page } of marks) {
+    if (!term) continue;
+    if (!map.has(term)) map.set(term, new Set());
+    map.get(term).add(page);
+  }
+  const entries = [...map.entries()].map(([term, pages]) => ({ term, pages: [...pages].sort((a, b) => a - b) }));
+  entries.sort((a, b) => a.term.toLowerCase().localeCompare(b.term.toLowerCase()));
+  return entries;
 }

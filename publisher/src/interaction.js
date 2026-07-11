@@ -2,13 +2,14 @@
 // thread text frames, edit text, and zoom/pan.
 import { store, begin, commit, emit, spreadObjects, getSpreads } from './store.js';
 import { TOOLS } from './personas.js';
-import { baseText, makeShape, makeImage, makeTable, makeToc } from './model.js';
-import { collectHeadings } from './textlayout.js';
+import { baseText, makeShape, makeImage, makeTable, makeToc, makeIndex } from './model.js';
+import { collectHeadings, collectIndex } from './textlayout.js';
 import {
   screenToDoc, getPlacements, placementForPage, objectScreenCorners,
   hitTest, findOnSpread, drawScene, getView, fitView,
-  computeTableLayout, tableCellAt, tableContentHeight,
+  tableCellAt, tableContentHeight, tableFrameLayout, tableChainOf,
   tocEntryAt, tocContentHeight,
+  indexEntryAt, indexContentHeight,
 } from './renderer.js';
 
 const scene = document.getElementById('scene');
@@ -94,7 +95,7 @@ function onPointerDown(e) {
   // Threading tool
   if (toolId === 'thread') {
     const hit = topmostAt(p.x, p.y);
-    if (hit && hit.obj.type === 'text') {
+    if (hit && (hit.obj.type === 'text' || hit.obj.type === 'table')) {
       if (!threadPending) { threadPending = hit.obj.id; store.ui.selection = [hit.obj.id]; }
       else if (threadPending !== hit.obj.id) { linkFrames(threadPending, hit.obj.id); threadPending = null; }
       drawScene();
@@ -126,9 +127,10 @@ function onPointerDown(e) {
     else if (tool.create === 'image') obj = makeImage(layerId, null, 0, 0);
     else if (tool.create === 'table') obj = makeTable(layerId);
     else if (tool.create === 'toc') obj = makeToc(layerId);
+    else if (tool.create === 'index') obj = makeIndex(layerId);
     else obj = makeShape(tool.create, layerId, defaultFill(tool.create));
     obj.x = loc.x; obj.y = loc.y;
-    if (tool.create !== 'table' && tool.create !== 'toc') { obj.w = 1; obj.h = 1; }
+    if (!['table', 'toc', 'index'].includes(tool.create)) { obj.w = 1; obj.h = 1; }
     pl.page.objects.push(obj);
     store.ui.selection = [obj.id];
     drag = { mode: 'create', obj, pl, origin: loc, tool: tool.create };
@@ -206,7 +208,7 @@ function onPointerDrag(e) {
     if (e.shiftKey && drag.tool !== 'line') { const s = Math.max(w, h); w = s; h = s; }
     if (drag.tool === 'table') { // height is content-driven
       o.x = Math.min(loc.x, drag.origin.x); o.y = drag.origin.y; o.w = Math.max(w, 60); o.h = tableContentHeight(o);
-    } else if (drag.tool === 'toc') {
+    } else if (drag.tool === 'toc' || drag.tool === 'index') {
       o.x = Math.min(loc.x, drag.origin.x); o.y = drag.origin.y; o.w = Math.max(w, 120); o.h = Math.max(h, 40);
     } else { o.x = x; o.y = y; o.w = Math.max(w, 1); o.h = Math.max(h, 1); }
     drawScene();
@@ -238,6 +240,9 @@ function onPointerUp(e) {
     } else if (drag.tool === 'toc') {
       if (o.w < 120) o.w = 360;
       regenerateToc(o); // fills entries and fits height
+    } else if (drag.tool === 'index') {
+      if (o.w < 120) o.w = 360;
+      regenerateIndex(o);
     } else if (o.w < 4 && o.h < 4) { // click without drag -> default size
       if (drag.tool === 'text') { o.w = 200; o.h = 80; }
       else if (drag.tool === 'line') { o.w = 120; o.h = 0.5; }
@@ -249,7 +254,8 @@ function onPointerUp(e) {
   } else if (drag.mode === 'move') {
     if (drag.moved) commit('move'); else emit();
   } else if (drag.mode === 'resize') {
-    if (drag.obj.type === 'table') drag.obj.h = tableContentHeight(drag.obj); // re-fit after width change
+    // lone tables auto-fit height to content; threaded tables keep their box
+    if (drag.obj.type === 'table' && !drag.obj.threadNext && !drag.obj.threadPrev) drag.obj.h = tableContentHeight(drag.obj);
     commit('resize');
   }
   else if (drag.mode === 'rotate') { commit('rotate'); }
@@ -356,12 +362,13 @@ function linkFrames(aId, bId) {
   begin('thread');
   const all = [...store.doc.pages, ...store.doc.masters].flatMap((c) => c.objects);
   const a = all.find((o) => o.id === aId), b = all.find((o) => o.id === bId);
-  if (!a || !b || a.type !== 'text' || b.type !== 'text') { commit('thread'); return; }
+  // Only link two frames of the same threadable kind (text→text or table→table).
+  if (!a || !b || a.type !== b.type || (a.type !== 'text' && a.type !== 'table')) { commit('thread'); return; }
   // detach b from any previous chain
   if (b.threadPrev) { const pv = all.find((o) => o.id === b.threadPrev); if (pv) pv.threadNext = null; }
   if (a.threadNext) { const nx = all.find((o) => o.id === a.threadNext); if (nx) nx.threadPrev = null; }
   a.threadNext = b.id; b.threadPrev = a.id;
-  // merge: b's own text appended to head story is ignored (head holds story)
+  // The head holds the rows/story; continuation frames display the overflow.
   commit('thread');
 }
 
@@ -430,6 +437,12 @@ export function regenerateToc(obj) {
   obj.h = tocContentHeight(obj);
 }
 
+// (Re)build a back-of-book index by scanning index marks and fitting its height.
+export function regenerateIndex(obj) {
+  obj.entries = collectIndex(store.doc);
+  obj.h = indexContentHeight(obj);
+}
+
 /* ---------- text editing ---------- */
 export function startTextEdit(id) {
   const found = findOnSpread(id);
@@ -467,14 +480,16 @@ function positionEditor(obj, pl) {
   editor.style.textAlign = obj.align === 'justify' ? 'left' : obj.align;
 }
 
-// Edit a single table cell, reusing the floating editor.
+// Edit a single table cell, reusing the floating editor. Cell data lives on the
+// chain HEAD (cell.headId); the clicked frame (obj) is only for positioning.
 export function startCellEdit(obj, pl, cell) {
+  const head = allObjects().find((o) => o.id === cell.headId) || obj;
   store.ui.editingTextId = obj.id;
-  store.ui.editingCell = { r: cell.r, c: cell.c };
+  store.ui.editingCell = { r: cell.r, c: cell.c, headId: head.id };
   store.ui.selection = [obj.id];
   begin('edit cell'); // snapshot BEFORE live edits so undo works
-  positionEditorForCell(obj, pl, cell);
-  editor.value = obj.rows[cell.r] && obj.rows[cell.r][cell.c] != null ? obj.rows[cell.r][cell.c] : '';
+  positionEditorForCell(obj, pl, cell, head);
+  editor.value = head.rows[cell.r] && head.rows[cell.r][cell.c] != null ? head.rows[cell.r][cell.c] : '';
   editor.readOnly = false;
   editor.style.display = 'block';
   editor.focus();
@@ -483,32 +498,44 @@ export function startCellEdit(obj, pl, cell) {
   onChange();
 }
 
-function positionEditorForCell(obj, pl, cell) {
+function positionEditorForCell(obj, pl, cell, head) {
+  head = head || obj;
   const z = store.ui.zoom;
   const sx = store.ui.pan.x + (pl.ox + obj.x + cell.x) * z;
   const sy = store.ui.pan.y + (pl.oy + obj.y + cell.y) * z;
-  const isHeader = cell.r === 0 && obj.headerRow;
+  const isHeader = cell.r === 0 && head.headerRow;
   editor.style.left = sx + 'px';
   editor.style.top = sy + 'px';
   editor.style.width = cell.w * z + 'px';
   editor.style.height = cell.h * z + 'px';
-  editor.style.padding = (obj.padding || 5) * z + 'px';
-  editor.style.font = `${isHeader ? '700 ' : '400 '}${obj.size * z}px ${obj.fontFamily}`;
-  editor.style.lineHeight = obj.lineHeight || 1.25;
-  editor.style.color = isHeader ? (obj.headerColor || '#fff') : obj.color;
-  editor.style.background = isHeader ? (obj.headerFill || '#444') : 'rgba(255,255,255,.96)';
+  editor.style.padding = (head.padding || 5) * z + 'px';
+  editor.style.font = `${isHeader ? '700 ' : '400 '}${head.size * z}px ${head.fontFamily}`;
+  editor.style.lineHeight = head.lineHeight || 1.25;
+  editor.style.color = isHeader ? (head.headerColor || '#fff') : head.color;
+  editor.style.background = isHeader ? (head.headerFill || '#444') : 'rgba(255,255,255,.96)';
   editor.style.transform = 'rotate(0deg)';
-  editor.style.textAlign = obj.align === 'justify' ? 'left' : (obj.align || 'left');
+  editor.style.textAlign = head.align === 'justify' ? 'left' : (head.align || 'left');
+}
+
+function editingHead() {
+  const cell = store.ui.editingCell;
+  return cell ? allObjects().find((o) => o.id === cell.headId) : null;
 }
 
 function onEditorInput() {
   const id = store.ui.editingTextId; if (!id) return;
-  const f = findOnSpread(id); if (!f || editor.readOnly) return;
   if (store.ui.editingCell) {
+    if (editor.readOnly) return;
     const { r, c } = store.ui.editingCell;
-    if (f.obj.rows[r]) { f.obj.rows[r][c] = editor.value; f.obj.h = tableContentHeight(f.obj); drawScene(); }
+    const head = editingHead();
+    if (head && head.rows[r]) {
+      head.rows[r][c] = editor.value;
+      if (!head.threadNext && !head.threadPrev) head.h = tableContentHeight(head);
+      drawScene();
+    }
     return;
   }
+  const f = findOnSpread(id); if (!f || editor.readOnly) return;
   f.obj.text = editor.value;
 }
 
@@ -526,10 +553,13 @@ export function commitTextEdit() {
   store.ui.editingCell = null;
   editor.style.display = 'none';
   editor.style.background = 'rgba(255,255,255,.96)';
-  if (f && cell) {
+  if (cell) {
     // begin() already captured the pre-edit snapshot in startCellEdit
-    if (f.obj.rows[cell.r]) f.obj.rows[cell.r][cell.c] = editor.value;
-    f.obj.h = tableContentHeight(f.obj);
+    const head = allObjects().find((o) => o.id === cell.headId);
+    if (head && head.rows[cell.r]) {
+      head.rows[cell.r][cell.c] = editor.value;
+      if (!head.threadNext && !head.threadPrev) head.h = tableContentHeight(head);
+    }
     commit('edit cell');
   } else if (f && !editor.readOnly) { f.obj.text = editor.value; commit('edit text'); }
   else { drawScene(); onChange(); }
@@ -548,6 +578,10 @@ function onDblClick(e) {
     const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
     const ent = tocEntryAt(hit.obj, local.x, local.y);
     if (ent) goToPageNumber(ent.entry.page);
+  } else if (hit.obj.type === 'index') {
+    const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+    const ent = indexEntryAt(hit.obj, local.x, local.y);
+    if (ent && ent.entry.pages.length) goToPageNumber(ent.entry.pages[0]);
   } else if (hit.obj.type === 'image') document.getElementById('file-image').click();
 }
 
@@ -611,9 +645,11 @@ export function repositionEditorIfOpen() {
   const f = findOnSpread(id);
   if (!f) return;
   if (store.ui.editingCell) {
-    const L = computeTableLayout(f.obj);
-    const { r, c } = store.ui.editingCell;
-    if (r < L.rowY.length) positionEditorForCell(f.obj, f.pl, { r, c, x: L.colX[c], y: L.rowY[r], w: L.colW[c], h: L.rowH[r] });
+    const { r, c, headId } = store.ui.editingCell;
+    const head = allObjects().find((o) => o.id === headId);
+    const L = tableFrameLayout(f.obj);
+    const vr = L.visualRows.find((v) => v.globalIndex === r);
+    if (vr) positionEditorForCell(f.obj, f.pl, { r, c, x: L.colX[c], y: vr.y, w: L.colW[c], h: vr.h }, head);
   } else {
     positionEditor(f.obj, f.pl);
   }

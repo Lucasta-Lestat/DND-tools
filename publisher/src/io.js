@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTableLayout, computeTocLayout } from './renderer.js';
+import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -174,6 +174,37 @@ function drawObjExport(g, obj, pl, imageMap) {
   if (obj.type === 'text') drawTextExport(g, obj, pl);
   if (obj.type === 'table') drawTableExport(g, obj);
   if (obj.type === 'toc') drawTocExport(g, obj);
+  if (obj.type === 'index') drawIndexExport(g, obj);
+  g.restore();
+}
+
+function clipTextTo(g, text, width) {
+  if (g.measureText(text).width <= width) return text;
+  let t = text;
+  while (t.length > 1 && g.measureText(t + '…').width > width) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function drawIndexExport(g, obj) {
+  if (obj.fill) { g.fillStyle = obj.fill; g.fillRect(0, 0, obj.w, obj.h); }
+  const L = computeIndexLayout(obj);
+  g.save();
+  g.beginPath(); g.rect(0, 0, obj.w, obj.h); g.clip();
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  if (obj.title) {
+    g.font = `700 ${obj.titleSize}px ${obj.fontFamily}`; g.fillStyle = obj.titleColor || obj.color;
+    g.fillText(obj.title, L.pad, L.pad + obj.titleSize * 0.82);
+  }
+  for (const row of L.rows) {
+    const baseline = row.y + obj.size * 0.82;
+    if (row.kind === 'letter') {
+      g.font = `700 ${obj.size}px ${obj.fontFamily}`; g.fillStyle = obj.letterColor || obj.color;
+      g.fillText(row.letter, row.x, baseline);
+    } else {
+      g.font = `400 ${obj.size}px ${obj.fontFamily}`; g.fillStyle = obj.color;
+      g.fillText(clipTextTo(g, `${row.entry.term}, ${row.entry.pages.join(', ')}`, row.colW), row.x, baseline);
+    }
+  }
   g.restore();
 }
 
@@ -212,37 +243,36 @@ function drawTocExport(g, obj) {
 }
 
 function drawTableExport(g, obj) {
-  const L = computeTableLayout(obj);
-  const rows = obj.rows || [];
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
+  const L = tableFrameLayout(obj);
+  const head = L.head;
+  for (const vr of L.visualRows) {
     let bg = null;
-    if (isHeader) bg = obj.headerFill;
-    else if (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) bg = obj.zebra;
-    else if (obj.fill) bg = obj.fill;
-    if (bg) { g.fillStyle = bg; g.fillRect(0, L.rowY[r], obj.w, L.rowH[r]); }
+    if (vr.kind === 'header') bg = head.headerFill;
+    else if (head.zebra && (vr.dataIndex % 2 === 1)) bg = head.zebra;
+    else if (head.fill) bg = head.fill;
+    if (bg) { g.fillStyle = bg; g.fillRect(0, vr.y, obj.w, vr.h); }
   }
-  if (obj.borderWidth > 0) {
-    g.strokeStyle = obj.borderColor || '#000'; g.lineWidth = obj.borderWidth;
+  if (head.borderWidth > 0) {
+    g.strokeStyle = head.borderColor || '#000'; g.lineWidth = head.borderWidth;
     g.strokeRect(0, 0, obj.w, L.totalH);
     g.beginPath();
-    for (let r = 1; r < rows.length; r++) { g.moveTo(0, L.rowY[r]); g.lineTo(obj.w, L.rowY[r]); }
+    for (let i = 1; i < L.visualRows.length; i++) { g.moveTo(0, L.visualRows[i].y); g.lineTo(obj.w, L.visualRows[i].y); }
     for (let c = 1; c < L.ncols; c++) { g.moveTo(L.colX[c], 0); g.lineTo(L.colX[c], L.totalH); }
     g.stroke();
   }
   g.textBaseline = 'alphabetic';
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
-    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
-    g.font = `${isHeader ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
-    g.fillStyle = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+  for (const vr of L.visualRows) {
+    const isHeader = vr.kind === 'header';
+    const style = { fontFamily: head.fontFamily, size: head.size, bold: isHeader, italic: false, tracking: 0 };
+    g.font = `${isHeader ? '700 ' : '400 '}${head.size}px ${head.fontFamily}`;
+    g.fillStyle = isHeader ? (head.headerColor || '#fff') : (head.color || '#222');
     for (let c = 0; c < L.ncols; c++) {
-      const txt = rows[r][c] != null ? rows[r][c] : '';
+      const txt = vr.cells[c] != null ? vr.cells[c] : '';
       const lines = wrapText(txt, style, Math.max(8, L.colW[c] - L.pad * 2));
-      const align = obj.align || 'left';
+      const align = head.align || 'left';
       g.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
       const tx = L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
-      lines.forEach((ln, i) => g.fillText(ln, tx, L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH));
+      lines.forEach((ln, i) => g.fillText(ln, tx, vr.y + L.pad + head.size * 0.82 + i * L.lineH));
     }
   }
   g.textAlign = 'left';
@@ -368,7 +398,26 @@ function svgForObject(obj, pl) {
   }
   if (obj.type === 'table') return `<g${rot}${op}>${svgForTable(obj, x, y)}</g>`;
   if (obj.type === 'toc') return `<g${rot}${op}>${svgForToc(obj, x, y)}</g>`;
+  if (obj.type === 'index') return `<g${rot}${op}>${svgForIndex(obj, x, y)}</g>`;
   return '';
+}
+
+function svgForIndex(obj, x, y) {
+  const L = computeIndexLayout(obj);
+  let out = '';
+  if (obj.fill) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="${obj.fill}"/>`;
+  if (obj.title) {
+    out += `<text x="${x + L.pad}" y="${y + L.pad + obj.titleSize * 0.82}" font-family="${esc(obj.fontFamily)}" font-size="${obj.titleSize}" font-weight="700" fill="${obj.titleColor || obj.color}">${esc(obj.title)}</text>`;
+  }
+  for (const row of L.rows) {
+    const baseline = y + row.y + obj.size * 0.82;
+    if (row.kind === 'letter') {
+      out += `<text x="${x + row.x}" y="${baseline}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="700" fill="${obj.letterColor || obj.color}">${esc(row.letter)}</text>`;
+    } else {
+      out += `<text x="${x + row.x}" y="${baseline}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" fill="${obj.color}">${esc(row.entry.term)}, ${row.entry.pages.join(', ')}</text>`;
+    }
+  }
+  return out;
 }
 
 function svgForToc(obj, x, y) {
@@ -390,33 +439,32 @@ function svgForToc(obj, x, y) {
 }
 
 function svgForTable(obj, x, y) {
-  const L = computeTableLayout(obj);
-  const rows = obj.rows || [];
+  const L = tableFrameLayout(obj);
+  const head = L.head;
   let out = '';
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
-    let bg = isHeader ? obj.headerFill : (obj.zebra && ((r - (obj.headerRow ? 1 : 0)) % 2 === 1)) ? obj.zebra : obj.fill;
-    if (bg) out += `<rect x="${x}" y="${y + L.rowY[r]}" width="${obj.w}" height="${L.rowH[r]}" fill="${bg}"/>`;
+  for (const vr of L.visualRows) {
+    let bg = vr.kind === 'header' ? head.headerFill : (head.zebra && (vr.dataIndex % 2 === 1)) ? head.zebra : head.fill;
+    if (bg) out += `<rect x="${x}" y="${y + vr.y}" width="${obj.w}" height="${vr.h}" fill="${bg}"/>`;
   }
-  if (obj.borderWidth > 0) {
-    const bc = obj.borderColor || '#000', bw = obj.borderWidth;
+  if (head.borderWidth > 0) {
+    const bc = head.borderColor || '#000', bw = head.borderWidth;
     out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${L.totalH}" fill="none" stroke="${bc}" stroke-width="${bw}"/>`;
-    for (let r = 1; r < rows.length; r++) out += `<line x1="${x}" y1="${y + L.rowY[r]}" x2="${x + obj.w}" y2="${y + L.rowY[r]}" stroke="${bc}" stroke-width="${bw}"/>`;
+    for (let i = 1; i < L.visualRows.length; i++) out += `<line x1="${x}" y1="${y + L.visualRows[i].y}" x2="${x + obj.w}" y2="${y + L.visualRows[i].y}" stroke="${bc}" stroke-width="${bw}"/>`;
     for (let c = 1; c < L.ncols; c++) out += `<line x1="${x + L.colX[c]}" y1="${y}" x2="${x + L.colX[c]}" y2="${y + L.totalH}" stroke="${bc}" stroke-width="${bw}"/>`;
   }
-  for (let r = 0; r < rows.length; r++) {
-    const isHeader = r === 0 && obj.headerRow;
-    const style = { fontFamily: obj.fontFamily, size: obj.size, bold: isHeader, italic: false, tracking: 0 };
-    const color = isHeader ? (obj.headerColor || '#fff') : (obj.color || '#222');
+  for (const vr of L.visualRows) {
+    const isHeader = vr.kind === 'header';
+    const style = { fontFamily: head.fontFamily, size: head.size, bold: isHeader, italic: false, tracking: 0 };
+    const color = isHeader ? (head.headerColor || '#fff') : (head.color || '#222');
     const weight = isHeader ? '700' : '400';
-    const align = obj.align || 'left';
+    const align = head.align || 'left';
     const anchor = align === 'center' ? 'middle' : align === 'right' ? 'end' : 'start';
     for (let c = 0; c < L.ncols; c++) {
-      const txt = rows[r][c] != null ? rows[r][c] : '';
+      const txt = vr.cells[c] != null ? vr.cells[c] : '';
       const lines = wrapText(txt, style, Math.max(8, L.colW[c] - L.pad * 2));
       const tx = x + L.colX[c] + (align === 'center' ? L.colW[c] / 2 : align === 'right' ? L.colW[c] - L.pad : L.pad);
       lines.forEach((ln, i) => {
-        out += `<text x="${tx}" y="${y + L.rowY[r] + L.pad + obj.size * 0.82 + i * L.lineH}" text-anchor="${anchor}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${color}">${esc(ln)}</text>`;
+        out += `<text x="${tx}" y="${y + vr.y + L.pad + head.size * 0.82 + i * L.lineH}" text-anchor="${anchor}" font-family="${esc(head.fontFamily)}" font-size="${head.size}" font-weight="${weight}" fill="${color}">${esc(ln)}</text>`;
       });
     }
   }
@@ -471,6 +519,14 @@ function pdfOverlays(spread) {
         const L = computeTocLayout(obj);
         for (const row of L.rows) {
           out += `<a class="lnk" href="#apub-page-${row.entry.page}" style="left:${pl.ox + obj.x}pt;top:${obj.y + row.y}pt;width:${obj.w}pt;height:${row.h}pt"></a>`;
+        }
+      }
+      // Index: each entry links to its first page
+      if (obj.type === 'index') {
+        const L = computeIndexLayout(obj);
+        for (const row of L.rows) {
+          if (row.kind !== 'entry' || !row.entry.pages.length) continue;
+          out += `<a class="lnk" href="#apub-page-${row.entry.pages[0]}" style="left:${pl.ox + obj.x + row.x}pt;top:${obj.y + row.y}pt;width:${row.colW}pt;height:${row.h}pt"></a>`;
         }
       }
     }

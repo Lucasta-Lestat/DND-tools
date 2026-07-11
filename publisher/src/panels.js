@@ -1,9 +1,9 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene, tableContentHeight, tocContentHeight } from './renderer.js';
+import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf } from './renderer.js';
 import { uid, makePage, PAGE_PRESETS } from './model.js';
-import { startTextEdit, followLink, ensureAnchorName, regenerateToc } from './interaction.js';
+import { startTextEdit, followLink, ensureAnchorName, regenerateToc, regenerateIndex } from './interaction.js';
 
 const collapsed = new Set();
 
@@ -119,6 +119,7 @@ export function renderStudio() {
   const builders = {
     transform: buildTransform,
     toc: buildToc,
+    index: buildIndex,
     table: buildTable,
     links: buildLinks,
     pages: buildPages,
@@ -166,8 +167,8 @@ function buildTransform() {
     num('Y', o.y, (v) => applyToSelection('move', (s) => s.y = v)),
   ]));
   kids.push(el('div', { class: 'row' }, [
-    num('W', o.w, (v) => applyToSelection('size', (s) => { s.w = Math.max(1, v); if (s.type === 'table') s.h = tableContentHeight(s); }), { min: 1 }),
-    num('H', o.h, (v) => applyToSelection('size', (s) => { if (s.type !== 'table') s.h = Math.max(1, v); }), { min: 1 }),
+    num('W', o.w, (v) => applyToSelection('size', (s) => { s.w = Math.max(1, v); if (s.type === 'table' && !s.threadNext && !s.threadPrev) s.h = tableContentHeight(s); }), { min: 1 }),
+    num('H', o.h, (v) => applyToSelection('size', (s) => { if (s.type !== 'table' || s.threadNext || s.threadPrev) s.h = Math.max(1, v); }), { min: 1 }),
   ]));
   kids.push(el('div', { class: 'row' }, [
     num('°', o.rotation || 0, (v) => applyToSelection('rotate', (s) => s.rotation = v)),
@@ -545,16 +546,64 @@ function levelToggle(o, level, label) {
     }, true) }, label);
 }
 
+/* ---- Index ---- */
+function indexMutate(label, fn, regen) {
+  const o = selectedObjects().find((s) => s.type === 'index');
+  if (!o) return;
+  begin(label); fn(o); if (regen) regenerateIndex(o); else o.h = indexContentHeight(o); commit(label);
+}
+
+function buildIndex() {
+  const o = selectedObjects().find((s) => s.type === 'index');
+  if (!o) return section('index', 'Index', [el('div', { class: 'empty', text: 'Select an index block (Index tool, X) to edit it.' })]);
+  const kids = [];
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { class: 'on', onclick: () => indexMutate('refresh index', () => {}, true), title: 'Rescan index marks and rebuild' }, '↻ Generate / Refresh'),
+  ]));
+  kids.push(el('div', { class: 'muted', text: `${(o.entries || []).length} terms · double-click an entry to jump to its first page.` }));
+  kids.push(el('div', { class: 'row' }, [
+    el('div', { class: 'field' }, [el('label', { text: 'Columns' }),
+      el('input', { type: 'number', min: 1, max: 4, value: o.columns, style: 'width:48px',
+        onchange: (e) => indexMutate('index cols', (t) => t.columns = Math.max(1, Math.min(4, parseInt(e.target.value) || 1)), true) })]),
+    toggleBtn('Group A–Z', o.groupByLetter, () => indexMutate('index group', (t) => t.groupByLetter = !t.groupByLetter, true)),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Title' }),
+    el('input', { class: 'grow', type: 'text', value: o.title || '', style: 'width:100%',
+      onchange: (e) => indexMutate('index title', (t) => t.title = e.target.value) }),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Font' }),
+    select(['Georgia, serif', 'system-ui, sans-serif', '"Times New Roman", serif'], o.fontFamily, (v) => indexMutate('index font', (t) => t.fontFamily = v)),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    num('Size', o.size, (v) => indexMutate('index size', (t) => t.size = Math.max(5, v)), { step: 0.5, min: 5 }),
+    num('Title', o.titleSize, (v) => indexMutate('index tsize', (t) => t.titleSize = Math.max(6, v)), { step: 0.5, min: 6 }),
+    num('Gap', o.columnGap, (v) => indexMutate('index gap', (t) => t.columnGap = Math.max(4, v)), { min: 4 }),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Letter / title' }),
+    colorInput(o.letterColor || '#7a2d1f', (c) => indexMutate('index lcolor', (t) => t.letterColor = c)),
+    colorInput(o.titleColor || '#7a2d1f', (c) => indexMutate('index tcolor', (t) => t.titleColor = c)),
+    colorInput(o.color || '#222222', (c) => indexMutate('index color', (t) => t.color = c)),
+  ]));
+  kids.push(el('div', { class: 'muted', html: 'Mark terms in text with <span class="kbd-tag">{index:Term}</span> (invisible), or add index terms to any object in the <b>Cross-References &amp; Links</b> panel. Refresh after changes.' }));
+  return section('index', 'Index', kids);
+}
+
 /* ---- Tables ---- */
 function tableMutate(label, fn) {
-  const o = selectedObjects().find((s) => s.type === 'table');
-  if (!o) return;
-  begin(label); fn(o); o.h = tableContentHeight(o); commit(label);
+  const sel = selectedObjects().find((s) => s.type === 'table');
+  if (!sel) return;
+  const o = tableChainOf(sel)[0]; // rows/styling live on the head
+  begin(label); fn(o); if (!o.threadNext && !o.threadPrev) o.h = tableContentHeight(o); commit(label);
 }
 
 function buildTable() {
-  const o = selectedObjects().find((s) => s.type === 'table');
-  if (!o) return section('table', 'Table', [el('div', { class: 'empty', text: 'Select a table (Table tool, B) to edit it.' })]);
+  const sel = selectedObjects().find((s) => s.type === 'table');
+  if (!sel) return section('table', 'Table', [el('div', { class: 'empty', text: 'Select a table (Table tool, B) to edit it.' })]);
+  const chain = tableChainOf(sel);
+  const o = chain[0]; // edit the head — it holds the rows and styling
   const ncols = Math.max(1, ...o.rows.map((r) => r.length));
   const dataRows = o.rows.length - (o.headerRow ? 1 : 0);
   const kids = [];
@@ -625,6 +674,13 @@ function buildTable() {
     const cell = o.rows[roll.row] ? (o.rows[roll.row][1] ?? o.rows[roll.row][0] ?? '') : '';
     kids.push(el('div', { class: 'muted', html: `Rolled <b style="color:#2f81f7">${roll.value}</b> → ${escapeHtml(String(cell)).slice(0, 60)}` }));
   }
+  // threading status / help
+  if (chain.length > 1) {
+    const pos = chain.indexOf(sel) + 1;
+    kids.push(el('div', { class: 'muted', html: `Flows across <b>${chain.length}</b> linked frames (this is frame ${pos}). The header row repeats on each.` }));
+  } else {
+    kids.push(el('div', { class: 'muted', text: 'To flow a long table across pages: draw another table, then use the Link tool (K) to link this one into it. The header repeats automatically.' }));
+  }
   kids.push(el('div', { class: 'muted', text: 'Double-click a cell to edit it.' }));
   return section('table', 'Table', kids);
 
@@ -661,8 +717,9 @@ function parseRange(s) {
   return null;
 }
 function rollOnTable() {
-  const o = selectedObjects().find((s) => s.type === 'table');
-  if (!o) return;
+  const sel = selectedObjects().find((s) => s.type === 'table');
+  if (!sel) return;
+  const o = tableChainOf(sel)[0]; // roll over the whole (possibly threaded) table
   const start = o.headerRow ? 1 : 0;
   const ranges = [];
   let lo = Infinity, hi = -Infinity;
@@ -738,6 +795,12 @@ function buildLinks() {
     el('button', { onclick: () => { begin('anchor'); ensureAnchorName(o); commit('anchor'); } }, 'Auto-name anchor'),
   ]));
   kids.push(el('div', { class: 'muted', html: 'In text, write <span class="kbd-tag">{page:combat-rules}</span> to insert that anchor\'s live page number. Ctrl/Cmd-click a linked object to follow it.' }));
+
+  kids.push(el('div', { class: 'muted', text: 'Index terms for this object (comma-separated)' }));
+  kids.push(el('div', { class: 'row' }, [
+    el('input', { class: 'grow', type: 'text', value: (o.indexTerms || []).join(', '), placeholder: 'e.g. Knotsmen, rope-priests',
+      style: 'width:100%', onchange: (e) => { begin('index terms'); o.indexTerms = e.target.value.split(',').map((s) => s.trim()).filter(Boolean); commit('index terms'); } }),
+  ]));
   return section('links', 'Cross-References & Links', kids);
 
   function setLink(mutator) {

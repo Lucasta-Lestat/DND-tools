@@ -110,6 +110,7 @@ function baseObject(layerId) {
     name: '',
     link: null,        // { type:'page'|'anchor'|'url', target } — cross-reference / hyperlink
     anchorName: '',     // named destination this object can be linked to / referenced by
+    indexTerms: [],     // terms that add this object's page to the generated index
   };
 }
 
@@ -187,12 +188,40 @@ export function makeToc(layerId) {
   };
 }
 
+// A generated back-of-book index.
+export function makeIndex(layerId) {
+  return {
+    ...baseObject(layerId),
+    type: 'index',
+    w: 360, h: 260,
+    title: 'Index',
+    entries: [],                // generated: [{ term, pages:[…] }]
+    columns: 2,
+    columnGap: 16,
+    groupByLetter: true,
+    fontFamily: 'Georgia, serif',
+    titleSize: 20,
+    titleColor: '#7a2d1f',
+    letterColor: '#7a2d1f',
+    size: 9.5,
+    color: '#222222',
+    lineHeight: 1.35,
+    indent: 10,                 // hanging indent for wrapped page lists
+    padding: 6,
+    fill: null,
+    stroke: null,
+    strokeWidth: 0,
+  };
+}
+
 // A data table — ideal for random/roll tables (e.g. d20 → result).
 export function makeTable(layerId) {
   return {
     ...baseObject(layerId),
     type: 'table',
     w: 240, h: 120,
+    threadNext: null,           // link tables to flow rows across pages (header repeats)
+    threadPrev: null,
     rows: [
       ['d20', 'Result'],
       ['1–5', 'Nothing of note'],
