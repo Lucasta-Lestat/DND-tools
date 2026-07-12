@@ -196,7 +196,7 @@ const SAMPLE_BODY = `## On the Dark
 
 Far beneath the roots of mountains the Dark{index:Dark, the} is not an absence of light but a presence of its own. It presses. It listens. Those who travel here learn quickly that a torch is a confession, and that silence is a currency more dear than gold.
 
-This guide collects what little is known of the peoples and perils of the under-realms. Treat every entry as rumour sharpened to the edge of fact.
+This guide collects what little is known of the peoples and perils of the under-realms. Treat every entry as rumour sharpened to the edge of fact. A day below covers perhaps 12 miles, and a guttering torch throws light just 30 ft into the pressing dark.
 
 ### The Knotsmen
 

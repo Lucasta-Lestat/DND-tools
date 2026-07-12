@@ -59,6 +59,15 @@ export function hyphenatePoints(word) {
   return hyphenateWord(word, 2, 3);
 }
 
+// Tie a value to its unit ("30 ft") and a label to its number ("DC 15", "p. 42")
+// with a non-breaking space, so the pair never splits across a line. The nbsp is
+// U+00A0 — it renders and measures as a normal space but is not a break candidate.
+const NB_UNITS = /(\d[\d,.\/]*)\x20(?=(?:ft|foot|feet|mi|mile|miles|yd|yard|yards|lb|lbs|gp|sp|cp|pp|ep|hp|xp|hr|hrs|hour|hours|min|minute|minutes|round|rounds|turn|turns|day|days|week|weeks|AC|DC|CR|HD)\.?\b)/gi;
+const NB_LABELS = /\b(pp?\.|No\.|Nos\.|Fig\.|Figs\.|Ch\.|Vol\.|Sec\.|DC|AC|CR|HD|HP|XP|Lvl?\.?)\x20(?=\d)/gi;
+export function applyNonBreaking(s) {
+  return s.replace(NB_UNITS, '$1\u00A0').replace(NB_LABELS, '$1\u00A0');
+}
+
 // Pull {index:Term} marks out of a line; they record an index entry but render
 // nothing. Returns the cleaned text plus the list of terms found.
 function extractIndexTerms(line) {
@@ -79,6 +88,7 @@ function resolveParagraph(rawLine, base, doc) {
     if (ps) style = ps;
   }
   if (doc.settings && doc.settings.smartTypography !== false) text = smartTypography(text);
+  if (doc.settings && doc.settings.nonBreakingUnits !== false) text = applyNonBreaking(text);
   return { text, style, level, indexTerms: terms };
 }
 
@@ -363,7 +373,8 @@ function greedyBreak(words, style, Lfun, hyphenate) {
 // including first-line indent). colW is the (uniform) column measure.
 function breakParagraph(para, colW, indent, hyphenate) {
   const style = para.style;
-  const words = para.text.length ? para.text.split(/\s+/).filter(Boolean) : [];
+  // split on breakable whitespace only — U+00A0 stays inside a word (a "tie")
+  const words = para.text.length ? para.text.split(/[\x20\t]+/).filter(Boolean) : [];
   const lineH = style.size * style.lineHeight;
   const common = { lineH, size: style.size, font: fontString(style), color: style.color, tracking: style.tracking || 0 };
   if (!words.length) return [{ spacer: true, ...common }];

@@ -264,6 +264,7 @@ function buildPages() {
   ]));
   kids.push(el('div', { class: 'row' }, [
     toggleBtn('Smart typography', s.smartTypography !== false, () => { begin('smart'); s.smartTypography = !(s.smartTypography !== false); commit('smart'); }),
+    toggleBtn('Unit ties', s.nonBreakingUnits !== false, () => { begin('nbsp'); s.nonBreakingUnits = !(s.nonBreakingUnits !== false); commit('nbsp'); }),
   ]));
 
   // master list

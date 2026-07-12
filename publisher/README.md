@@ -91,8 +91,10 @@ Switch with the buttons or keys **1 / 2 / 3**.
   pattern set — dictionary-quality break points) feeds the breaker as penalised
   optional breaks. Ragged text falls back to a fast greedy breaker.
   **Smart typography** turns straight quotes curly and `--`/`---`/`...` into en/em
-  dashes and an ellipsis, and paragraphs support a **first-line indent** — all
-  per-frame toggleable and applied in every export.
+  dashes and an ellipsis; **unit ties** keep a value with its unit (`30 ft`,
+  `DC 15`, `5 gp`, `p. 42`) together with a non-breaking space so they never split
+  across a line; and paragraphs support a **first-line indent** — all toggleable
+  and applied in every export.
 
 ![Hyphenated, justified two-column body text](docs/typesetting.png)
 

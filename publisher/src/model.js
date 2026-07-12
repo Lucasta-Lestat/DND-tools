@@ -41,6 +41,7 @@ export function newDocument(opts = {}) {
       gutter: 14,
       units: 'pt',
       smartTypography: true,
+      nonBreakingUnits: true,
     },
     layers: [
       { id: layerId, name: 'Layer 1', visible: true, locked: false },
