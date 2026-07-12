@@ -581,18 +581,30 @@ function pdfOverlays(spread) {
           out += `<a class="lnk" href="#apub-page-${row.entry.pages[0]}" style="left:${pl.ox + obj.x + row.x}pt;top:${obj.y + row.y}pt;width:${row.colW}pt;height:${row.h}pt"></a>`;
         }
       }
-      // Hex map: each linked hex is a clickable region (bounding box)
+      // Hex map: PDF link annotations are rectangular, so approximate each linked
+      // hex with a stack of inscribed horizontal strips (never overlapping a
+      // neighbour). More strips → closer to the true hexagon.
       if (obj.type === 'hexmap') {
         const geo = hexGeometry(obj);
+        const STRIPS = 6;
         for (const key in obj.hexes) {
           const d = obj.hexes[key];
           if (!d || !d.link) continue;
           const href = linkHref(d.link);
           if (!href) continue;
-          const [c, r] = key.split(',').map(Number);
-          const cn = hexCenter(geo, c, r); const s = geo.size;
           const tgt = d.link.type === 'url' ? ' target="_blank"' : '';
-          out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x + cn.x - s}pt;top:${obj.y + cn.y - s}pt;width:${s * 2}pt;height:${s * 2}pt"></a>`;
+          const [c, r] = key.split(',').map(Number);
+          const cn = hexCenter(geo, c, r);
+          const poly = hexPoly(cn.x, cn.y, geo.size, geo.pointy);
+          const ys = poly.map((p) => p.y); const top = Math.min(...ys), bot = Math.max(...ys);
+          for (let i = 0; i < STRIPS; i++) {
+            const y0 = top + i * (bot - top) / STRIPS, y1 = top + (i + 1) * (bot - top) / STRIPS;
+            const s0 = spanAtY(poly, y0), s1 = spanAtY(poly, y1);
+            if (!s0 || !s1) continue;
+            const left = Math.max(s0[0], s1[0]), right = Math.min(s0[1], s1[1]); // inscribed
+            if (right - left < 1) continue;
+            out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x + left}pt;top:${obj.y + y0}pt;width:${right - left}pt;height:${y1 - y0}pt"></a>`;
+          }
         }
       }
     }
@@ -604,6 +616,18 @@ function linkHref(link) {
   if (link.type === 'page') return `#apub-page-${parseInt(link.target, 10) || 1}`;
   if (link.type === 'anchor') return `#apub-anchor-${slug(link.target)}`;
   return null;
+}
+
+// Horizontal extent [xmin, xmax] of a convex polygon at height y (or null).
+function spanAtY(poly, y) {
+  const xs = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    if (y < Math.min(a.y, b.y) || y > Math.max(a.y, b.y)) continue;
+    if (a.y === b.y) { xs.push(a.x, b.x); }
+    else xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+  }
+  return xs.length ? [Math.min(...xs), Math.max(...xs)] : null;
 }
 
 /* ---------- utils ---------- */

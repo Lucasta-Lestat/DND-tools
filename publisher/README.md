@@ -47,7 +47,9 @@ Switch with the buttons or keys **1 / 2 / 3**.
   pointy-top hexes with coordinate labels (`0101`…), per-hex fill colour and
   custom label, and an optional background map image. Each hex can **link to a
   page, a named anchor, or a URL** — Ctrl/Cmd-click or double-click a hex to jump
-  to its details in the text, and links export as clickable regions in the PDF.
+  to its details in the text, and links export as clickable regions in the PDF —
+  each hex tiled with inscribed, non-overlapping rectangles that hug its shape
+  (PDF link areas are rectangular, so this is as precise as the format allows).
   **Auto-link by coordinate** wires every hex to a text anchor named
   `hex-<coord>` in one click.
 
