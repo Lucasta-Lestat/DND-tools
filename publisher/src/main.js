@@ -17,6 +17,7 @@ import {
 import {
   saveProject, openProjectFile, placeImageFile, exportPNG, exportSVG, exportPDF,
 } from './io.js';
+import { initFind, toggleFind, findNext, closeFind, isFindOpen } from './find.js';
 
 let lastCursor = null;
 
@@ -86,6 +87,7 @@ function bindMenu() {
     if (!btn) return;
     const a = btn.dataset.action;
     if (a === 'new') newDoc();
+    else if (a === 'find') toggleFind(false);
     else if (a === 'open') document.getElementById('file-open').click();
     else if (a === 'save') saveProject();
     else if (a === 'undo') undo();
@@ -218,10 +220,16 @@ function bindKeys() {
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(); return; }
     if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); document.getElementById('file-open').click(); return; }
+    if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFind(false); return; }
+    if (mod && e.key.toLowerCase() === 'h') { e.preventDefault(); toggleFind(true); return; }
+    if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); return; }
+    if (e.key === 'F3') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); return; }
     if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); store.ui.zoom = Math.min(8, store.ui.zoom * 1.2); emit(); return; }
     if (mod && e.key === '-') { e.preventDefault(); store.ui.zoom = Math.max(0.05, store.ui.zoom / 1.2); emit(); return; }
 
     if (typing) return;
+
+    if (e.key === 'Escape' && isFindOpen()) { closeFind(); return; }
 
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
     if (e.key === 'Escape') { store.ui.selection = []; emit(); return; }
@@ -276,6 +284,7 @@ function boot() {
   resetHistory();
   subscribe(renderAll);
   initInteraction(emit);
+  initFind();
   bindMenu();
   bindKeys();
 

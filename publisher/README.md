@@ -77,6 +77,12 @@ Switch with the buttons or keys **1 / 2 / 3**.
   button) to follow it. Inline **`{page:anchor-name}`** tokens in text resolve to
   the target's **live page number** ("see page 42") and update if it moves. Links
   and anchors are exported as real clickable links in the PDF.
+- **Find & replace** — a document-wide find bar (Ctrl/Cmd+F) that searches every
+  text frame and table cell. Step through matches (Enter / F3), each highlighted in
+  place, and **Replace** or **Replace All** (Ctrl/Cmd+H), with a match-case toggle.
+
+![Find and replace bar](docs/find.png)
+
 - **Paragraph styles** — apply, create-from-frame, and redefine; full character
   controls (font, size, leading, tracking, alignment incl. justify, colour).
 - **Vector objects** — rectangles (with corner radius), ellipses, lines, with
@@ -99,6 +105,7 @@ Switch with the buttons or keys **1 / 2 / 3**.
 | `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
 | `1` / `2` / `3` | Publisher / Designer / Photo persona |
 | `Ctrl/Cmd Z` · `Ctrl/Cmd Shift Z` | undo / redo |
+| `Ctrl/Cmd F` · `Ctrl/Cmd H` · `Ctrl/Cmd G` / `F3` | find · replace · find next |
 | `Ctrl/Cmd S` · `Ctrl/Cmd O` | save / open |
 | `Ctrl/Cmd =` · `Ctrl/Cmd -` · `F` | zoom in / out / fit |
 | `Delete` | delete selection |
@@ -180,6 +187,7 @@ Plain ES modules, no framework:
 | `src/renderer.js` | Canvas drawing, table pagination, TOC/index layout, hit-testing, selection chrome |
 | `src/interaction.js` | Pointer tools: select/move/resize/rotate/create/thread/cell-edit/link |
 | `src/panels.js` | Persona switcher, tool strip, context bar, studio panels (incl. Table & Links) |
+| `src/find.js` | Document-wide find & replace over text frames and table cells |
 | `src/io.js` | Save/open and PNG/SVG/PDF export (with clickable PDF links) |
 | `src/main.js` | Bootstrap, rulers, keyboard, render loop |
 

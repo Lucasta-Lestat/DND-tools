@@ -29,10 +29,15 @@ export function initInteraction(changeCb) {
   scene.addEventListener('pointermove', onPointerHover);
   scene.addEventListener('dblclick', onDblClick);
   scene.addEventListener('wheel', onWheel, { passive: false });
-  editor.addEventListener('blur', commitTextEdit);
+  editor.addEventListener('blur', () => { if (!blurSuppressed) commitTextEdit(); });
   editor.addEventListener('keydown', onEditorKey);
   editor.addEventListener('input', onEditorInput);
 }
+
+// While find/replace juggles focus between its bar and the editor, keep the
+// editor open (its selection is the match highlight) instead of committing on blur.
+let blurSuppressed = false;
+export function setBlurSuppressed(v) { blurSuppressed = v; }
 
 function localPoint(e) {
   const rect = scene.getBoundingClientRect();
@@ -540,8 +545,11 @@ function onEditorInput() {
 }
 
 function onEditorKey(e) {
-  if (e.key === 'Escape') { e.preventDefault(); commitTextEdit(); }
-  e.stopPropagation(); // don't trigger global shortcuts while typing
+  if (e.key === 'Escape') { e.preventDefault(); commitTextEdit(); return; }
+  const mod = e.ctrlKey || e.metaKey;
+  // let find/replace shortcuts bubble to the global handler
+  if ((mod && ['f', 'h', 'g'].includes(e.key.toLowerCase())) || e.key === 'F3') return;
+  e.stopPropagation(); // otherwise don't trigger global shortcuts while typing
 }
 
 export function commitTextEdit() {

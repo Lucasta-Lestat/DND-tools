@@ -154,6 +154,28 @@ input[type=range] { accent-color: var(--accent); }
 .btnrow button:hover, .mini:hover { border-color: var(--accent); }
 .btnrow button.danger:hover { border-color: var(--warn); color: var(--warn); }
 
+/* Find & replace bar */
+.findbar {
+  position: absolute; top: 10px; right: 14px; z-index: 30; display: none;
+  width: 280px; flex-wrap: wrap; gap: 6px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 9px; box-shadow: 0 8px 30px #000a;
+}
+.findbar.open { display: flex; }
+.findbar .fieldwrap { display: flex; align-items: center; gap: 4px; width: 100%; }
+.findbar input[type=text] {
+  flex: 1; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink);
+  border-radius: 5px; padding: 5px 7px; min-width: 0;
+}
+.findbar button {
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink);
+  border-radius: 5px; padding: 5px 8px; cursor: pointer; min-width: 28px;
+}
+.findbar button:hover { border-color: var(--accent); }
+.findbar button.on { background: var(--accent); border-color: var(--accent-2); color: #fff; }
+.findbar .count { width: 100%; color: var(--ink-dim); font-size: 11px; min-height: 14px; }
+.findbar .grow { flex: 1; }
+
 /* List items (pages, layers, styles) */
 .list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
 .item {
