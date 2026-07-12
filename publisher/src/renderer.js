@@ -454,15 +454,34 @@ function drawTable(obj) {
 
 /* ---------- table of contents ---------- */
 
-// Pure vertical layout for a TOC (object-local pts).
+// Resolve a TOC entry's effective style for its heading level, with fallbacks.
+export function tocLevelStyle(obj, level) {
+  const ls = (obj.levelStyles && obj.levelStyles[level]) || {};
+  return {
+    size: ls.size ?? obj.size,
+    color: ls.color ?? obj.color,
+    bold: ls.bold ?? (level === 1),
+    italic: ls.italic ?? false,
+    indent: ls.indent ?? (level - 1) * obj.indent,
+    showPage: ls.showPage ?? true,
+    leader: ls.leader ?? true,
+  };
+}
+
+// Pure vertical layout for a TOC (object-local pts). Row heights follow the
+// per-level font size, so levels can differ in size.
 export function computeTocLayout(obj) {
   const pad = obj.padding ?? 6;
   const titleH = obj.title ? obj.titleSize * obj.lineHeight : 0;
-  const rowH = obj.size * obj.lineHeight;
   const rows = [];
   let y = pad + titleH;
-  for (const entry of obj.entries || []) { rows.push({ y, h: rowH, entry }); y += rowH; }
-  return { pad, titleH, rowH, rows, totalH: y + pad };
+  for (const entry of obj.entries || []) {
+    const st = tocLevelStyle(obj, entry.level);
+    const h = st.size * obj.lineHeight;
+    rows.push({ y, h, entry, style: st });
+    y += h;
+  }
+  return { pad, titleH, rows, totalH: y + pad };
 }
 
 export function tocContentHeight(obj) { return computeTocLayout(obj).totalH; }
@@ -492,20 +511,21 @@ function drawToc(obj) {
   }
   for (const row of L.rows) {
     const e = row.entry;
-    const bold = e.level === 1;
-    ctx.font = `${bold ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
-    ctx.fillStyle = obj.color;
-    const baseline = row.y + obj.size * 0.82;
-    const x0 = pad + (e.level - 1) * obj.indent;
-    const pageStr = String(e.page);
+    const st = row.style;
+    ctx.font = `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : '400 '}${st.size}px ${obj.fontFamily}`;
+    ctx.fillStyle = st.color;
+    const baseline = row.y + st.size * 0.82;
+    const x0 = pad + st.indent;
     ctx.textAlign = 'left';
     ctx.fillText(e.text, x0, baseline);
+    if (!st.showPage) continue;
     const textW = ctx.measureText(e.text).width;
+    const pageStr = String(e.page);
     ctx.textAlign = 'right';
     ctx.fillText(pageStr, obj.w - pad, baseline);
     const pageW = ctx.measureText(pageStr).width;
     // dot leaders between the entry text and the page number
-    if (obj.leader) {
+    if (obj.leader && st.leader) {
       ctx.textAlign = 'left';
       const start = x0 + textW + 4;
       const end = obj.w - pad - pageW - 4;

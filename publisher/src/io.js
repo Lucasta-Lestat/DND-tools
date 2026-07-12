@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout } from './renderer.js';
+import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -221,16 +221,18 @@ function drawTocExport(g, obj) {
   }
   for (const row of L.rows) {
     const e = row.entry;
-    g.font = `${e.level === 1 ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
-    g.fillStyle = obj.color;
-    const baseline = row.y + obj.size * 0.82;
-    const x0 = L.pad + (e.level - 1) * obj.indent;
-    const pageStr = String(e.page);
+    const st = row.style;
+    g.font = `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : '400 '}${st.size}px ${obj.fontFamily}`;
+    g.fillStyle = st.color;
+    const baseline = row.y + st.size * 0.82;
+    const x0 = L.pad + st.indent;
     g.textAlign = 'left'; g.fillText(e.text, x0, baseline);
+    if (!st.showPage) continue;
     const textW = g.measureText(e.text).width;
+    const pageStr = String(e.page);
     g.textAlign = 'right'; g.fillText(pageStr, obj.w - L.pad, baseline);
     const pageW = g.measureText(pageStr).width;
-    if (obj.leader) {
+    if (obj.leader && st.leader) {
       g.textAlign = 'left';
       const start = x0 + textW + 4, end = obj.w - L.pad - pageW - 4;
       const dotW = g.measureText(obj.leader + ' ').width || 4;
@@ -429,11 +431,13 @@ function svgForToc(obj, x, y) {
   }
   for (const row of L.rows) {
     const e = row.entry;
-    const baseline = y + row.y + obj.size * 0.82;
-    const x0 = x + L.pad + (e.level - 1) * obj.indent;
-    const weight = e.level === 1 ? '700' : '400';
-    out += `<text x="${x0}" y="${baseline}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${obj.color}">${esc(e.text)}</text>`;
-    out += `<text x="${x + obj.w - L.pad}" y="${baseline}" text-anchor="end" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" font-weight="${weight}" fill="${obj.color}">${e.page}</text>`;
+    const st = row.style;
+    const baseline = y + row.y + st.size * 0.82;
+    const x0 = x + L.pad + st.indent;
+    const weight = st.bold ? '700' : '400';
+    const fstyle = st.italic ? ' font-style="italic"' : '';
+    out += `<text x="${x0}" y="${baseline}" font-family="${esc(obj.fontFamily)}" font-size="${st.size}" font-weight="${weight}"${fstyle} fill="${st.color}">${esc(e.text)}</text>`;
+    if (st.showPage) out += `<text x="${x + obj.w - L.pad}" y="${baseline}" text-anchor="end" font-family="${esc(obj.fontFamily)}" font-size="${st.size}" font-weight="${weight}"${fstyle} fill="${st.color}">${e.page}</text>`;
   }
   return out;
 }

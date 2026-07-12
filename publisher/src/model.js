@@ -179,9 +179,15 @@ export function makeToc(layerId) {
     size: 11,
     color: '#222222',
     lineHeight: 1.6,
-    indent: 16,                 // per-level indent
+    indent: 16,                 // fallback per-level indent step
     leader: '·',                // dot-leader character
     padding: 6,
+    // Per-level overrides; any omitted field falls back to the values above.
+    levelStyles: {
+      1: { size: 13, bold: true, italic: false, color: '#1d1f23', indent: 0, showPage: true, leader: true },
+      2: { size: 11, bold: false, italic: false, color: '#333333', indent: 16, showPage: true, leader: true },
+      3: { size: 10, bold: false, italic: true, color: '#555555', indent: 30, showPage: true, leader: true },
+    },
     fill: null,
     stroke: null,
     strokeWidth: 0,

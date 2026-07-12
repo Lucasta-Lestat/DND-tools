@@ -1,7 +1,7 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf } from './renderer.js';
+import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf, tocLevelStyle } from './renderer.js';
 import { uid, makePage, PAGE_PRESETS } from './model.js';
 import { startTextEdit, followLink, ensureAnchorName, regenerateToc, regenerateIndex } from './interaction.js';
 
@@ -530,10 +530,40 @@ function buildToc() {
   kids.push(el('div', { class: 'row split' }, [
     el('label', { text: 'Title colour' }),
     colorInput(o.titleColor || '#7a2d1f', (c) => tocMutate('toc tcolor', (t) => t.titleColor = c)),
-    colorInput(o.color || '#222222', (c) => tocMutate('toc color', (t) => t.color = c)),
   ]));
+
+  kids.push(el('div', { class: 'muted', text: 'Per-level style — size · colour · B · I · indent · # (page no.)' }));
+  for (const level of [1, 2, 3]) kids.push(tocLevelRow(o, level));
+
   kids.push(el('div', { class: 'muted', text: 'Headings come from text starting with “# ”, “## ”, or “### ”. Refresh after editing or repaginating.' }));
   return section('toc', 'Table of Contents', kids);
+}
+
+function tocLevelMutate(level, label, fn) {
+  const o = selectedObjects().find((s) => s.type === 'toc');
+  if (!o) return;
+  begin(label);
+  o.levelStyles = o.levelStyles || {};
+  o.levelStyles[level] = { ...tocLevelStyle(o, level) }; // materialise resolved values, then edit
+  fn(o.levelStyles[level]);
+  o.h = tocContentHeight(o);
+  commit(label);
+}
+
+function tocLevelRow(o, level) {
+  const st = tocLevelStyle(o, level);
+  return el('div', { class: 'row', style: 'flex-wrap:wrap;gap:5px' }, [
+    el('label', { text: `H${level}`, style: 'min-width:22px' }),
+    el('input', { type: 'number', step: 0.5, min: 4, value: round(st.size), title: 'Size', style: 'width:46px',
+      onchange: (e) => tocLevelMutate(level, 'toc h size', (s) => s.size = Math.max(4, parseFloat(e.target.value) || st.size)) }),
+    colorInput(st.color, (c) => tocLevelMutate(level, 'toc h colour', (s) => s.color = c)),
+    styleToggle('B', st.bold, () => tocLevelMutate(level, 'toc h bold', (s) => s.bold = !s.bold)),
+    styleToggle('I', st.italic, () => tocLevelMutate(level, 'toc h italic', (s) => s.italic = !s.italic)),
+    el('input', { type: 'number', min: 0, value: round(st.indent), title: 'Indent', style: 'width:46px',
+      onchange: (e) => tocLevelMutate(level, 'toc h indent', (s) => s.indent = Math.max(0, parseFloat(e.target.value) || 0)) }),
+    el('button', { class: 'mini', title: 'Show page number for this level', style: st.showPage ? 'background:var(--accent);color:#fff' : '',
+      onclick: () => tocLevelMutate(level, 'toc h page', (s) => s.showPage = !s.showPage) }, '#'),
+  ]);
 }
 
 function levelToggle(o, level, label) {

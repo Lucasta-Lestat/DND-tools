@@ -44,11 +44,14 @@ Switch with the buttons or keys **1 / 2 / 3**.
   and frame-to-frame. Lightweight markup — start a line with `# ` or `## ` for
   headings — lets one story mix styles.
 - **Table of contents** — a generated **Contents** block built by scanning your
-  `#`/`##`/`###` headings. Choose which levels to include; entries are indented by
-  level with **dot leaders** and **live page numbers**. Click **Generate / Refresh**
-  after writing or repaginating, double-click an entry to jump to its page, and the
-  TOC exports as clickable links in the PDF. (The starter document ships with one as
-  front matter — note the page numbers update when content moves.)
+  `#`/`##`/`###` headings. Choose which levels to include, and give each heading
+  level its **own style** — size, colour, bold/italic, indent, and whether it shows
+  a page number — so chapter titles, sections, and sub-sections read as a clear
+  hierarchy. Entries use **dot leaders** and **live page numbers**. Click
+  **Generate / Refresh** after writing or repaginating, double-click an entry to
+  jump to its page, and the TOC exports as clickable links in the PDF. (The starter
+  document ships with one as front matter — note the page numbers update when
+  content moves.)
 
 ![Generated table of contents](docs/toc.png)
 
@@ -128,7 +131,8 @@ Switch with the buttons or keys **1 / 2 / 3**.
 2. Pick the **Contents** tool (`C`) and drag out a block (usually on a front
    page). It generates immediately from the current headings.
 3. In the **Table of Contents** panel choose which levels to include (H1/H2/H3),
-   set the title, fonts, indent, and leader character.
+   set the title, fonts, and leader character, and style each level in the
+   **Per-level style** rows (size · colour · **B** · *I* · indent · `#` page-number).
 4. After editing headings or when pagination changes, click **Generate /
    Refresh**. Double-click any entry to jump to its page; entries become clickable
    links in the exported PDF.
