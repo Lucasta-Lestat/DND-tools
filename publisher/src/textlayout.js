@@ -31,7 +31,51 @@ export function frameBaseStyle(frame, doc) {
     fontFamily: frame.fontFamily, size: frame.size, color: frame.color,
     bold: frame.bold, italic: frame.italic, align: frame.align,
     lineHeight: frame.lineHeight, tracking: frame.tracking || 0, spaceAfter: 4,
+    firstLineIndent: frame.firstLineIndent || 0,
   };
+}
+
+/* ---------- typographic niceties ---------- */
+
+// Straight quotes → curly, -- → en dash, --- → em dash, ... → ellipsis.
+export function smartTypography(s) {
+  s = s.replace(/---/g, '—').replace(/--/g, '–').replace(/\.\.\./g, '…');
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    const prev = out[out.length - 1] || ' ';
+    if (c === '"') out += /[\s([{—–\-]/.test(prev) ? '“' : '”';
+    else if (c === "'") out += /[\s([{—–\-]/.test(prev) ? '‘' : '’';
+    else out += c;
+  }
+  return out;
+}
+
+// Conservative English hyphenation: returns break positions (prefix lengths).
+// Errs toward fewer, safer hyphens rather than aggressive splitting.
+const VOWELS = 'aeiouy';
+const isVowel = (ch) => VOWELS.indexOf(ch) !== -1;
+const HYPH_PREFIXES = ['inter', 'under', 'super', 'trans', 'multi', 'semi', 'anti', 'over', 'fore', 'counter', 're', 'un', 'in', 'im', 'dis', 'mis', 'non', 'pre', 'pro', 'con', 'com', 'sub', 'out', 'de', 'en', 'ex'];
+const HYPH_SUFFIXES = ['ations', 'ation', 'tions', 'tion', 'sions', 'sion', 'ings', 'ing', 'ments', 'ment', 'ness', 'able', 'ible', 'ful', 'less', 'ous', 'ive', 'ize', 'ise', 'ity', 'ent', 'ant', 'ence', 'ance', 'age', 'ward', 'ly', 'ers', 'est', 'ed', 'al', 'ic'];
+const HYPH_DIGRAPHS = new Set(['ch', 'sh', 'th', 'ph', 'wh', 'gh', 'ck', 'ng', 'qu', 'rh']);
+
+export function hyphenatePoints(word) {
+  const w = word.toLowerCase();
+  const len = w.length;
+  const LMIN = 2, RMIN = 3;
+  if (len < 6) return [];
+  const pts = new Set();
+  // doubled consonant between vowels: run-ning, let-ter
+  for (let i = 1; i < len - 1; i++) {
+    if (w[i] === w[i + 1] && !isVowel(w[i]) && isVowel(w[i - 1]) && (i + 2 >= len || isVowel(w[i + 2]))) pts.add(i + 1);
+  }
+  // VCCV with differing consonants (not a digraph): win-dow, mon-ster
+  for (let i = 1; i < len - 2; i++) {
+    if (isVowel(w[i - 1]) && !isVowel(w[i]) && !isVowel(w[i + 1]) && isVowel(w[i + 2]) && w[i] !== w[i + 1] && !HYPH_DIGRAPHS.has(w[i] + w[i + 1])) pts.add(i + 1);
+  }
+  for (const p of HYPH_PREFIXES) if (w.startsWith(p) && len - p.length >= RMIN) pts.add(p.length);
+  for (const s of HYPH_SUFFIXES) if (w.endsWith(s) && len - s.length >= LMIN) pts.add(len - s.length);
+  return [...pts].filter((p) => p >= LMIN && len - p >= RMIN).sort((a, b) => a - b);
 }
 
 // Pull {index:Term} marks out of a line; they record an index entry but render
@@ -53,6 +97,7 @@ function resolveParagraph(rawLine, base, doc) {
     const ps = doc.paragraphStyles.find((p) => p.name === name);
     if (ps) style = ps;
   }
+  if (doc.settings && doc.settings.smartTypography !== false) text = smartTypography(text);
   return { text, style, level, indexTerms: terms };
 }
 
@@ -109,44 +154,77 @@ function columnsOf(frame) {
   return rects;
 }
 
-// Build one wrapped line from a paragraph starting at word index `from`.
-function buildLine(words, from, style, colW) {
+// Build one wrapped line starting at word index `from`, optionally continuing a
+// `carry` fragment left over from a hyphenated word on the previous line.
+// Returns items (each { text, w }), and a new `carry` if this line ends mid-word.
+function buildLine(words, from, carry, style, colW, hyphenate) {
   setMeasureStyle(style);
   const spaceW = mctx.measureText(' ').width;
-  let i = from;
-  const widths = [];
-  let lineWords = [];
+  const hyphenW = mctx.measureText('-').width;
+  const measure = (t) => mctx.measureText(t).width;
+  const canHyph = (wd) => hyphenate && wd.length >= 6 && /^[A-Za-z]+$/.test(wd);
+  // Largest hyphen prefix of `wd` whose text width fits `avail`, or null.
+  const splitToFit = (wd, avail) => {
+    if (!canHyph(wd) || avail <= 0) return null;
+    const pts = hyphenatePoints(wd);
+    let best = -1;
+    for (const p of pts) { if (measure(wd.slice(0, p)) <= avail) best = p; else break; }
+    return best > 0 ? { prefix: wd.slice(0, best), rest: wd.slice(best) } : null;
+  };
+
+  const items = [];
   let natural = 0;
+  let i = from;
+  let newCarry = null;
+
+  if (carry != null) {
+    const cw = measure(carry);
+    if (cw <= colW) { items.push({ text: carry, w: cw }); natural = cw; }
+    else {
+      const sp = splitToFit(carry, colW - hyphenW);
+      if (sp) { items.push({ text: sp.prefix + '-', w: measure(sp.prefix) + hyphenW }); natural = measure(sp.prefix) + hyphenW; newCarry = sp.rest; }
+      else { items.push({ text: carry, w: cw }); natural = cw; }
+      return { items, natural, spaceW, nextFrom: i, carry: newCarry, endsParagraph: i >= words.length && !newCarry };
+    }
+  }
+
   while (i < words.length) {
-    const wWidth = mctx.measureText(words[i]).width;
-    const add = (lineWords.length ? spaceW : 0) + wWidth;
-    if (lineWords.length && natural + add > colW) break;
-    lineWords.push(words[i]);
-    widths.push(wWidth);
-    natural += add;
-    i++;
+    const word = words[i];
+    const wWidth = measure(word);
+    const gap = items.length ? spaceW : 0;
+    if (items.length && natural + gap + wWidth > colW) {
+      const sp = splitToFit(word, colW - natural - gap - hyphenW);
+      if (sp) { items.push({ text: sp.prefix + '-', w: measure(sp.prefix) + hyphenW }); natural += gap + measure(sp.prefix) + hyphenW; newCarry = sp.rest; i++; }
+      break;
+    }
+    if (!items.length && wWidth > colW) {
+      const sp = splitToFit(word, colW - hyphenW);
+      if (sp) { items.push({ text: sp.prefix + '-', w: measure(sp.prefix) + hyphenW }); natural = measure(sp.prefix) + hyphenW; newCarry = sp.rest; i++; }
+      else { items.push({ text: word, w: wWidth }); natural = wWidth; i++; }
+      break;
+    }
+    items.push({ text: word, w: wWidth }); natural += gap + wWidth; i++;
   }
-  if (lineWords.length === 0 && from < words.length) {
-    // single word longer than column — force it
-    lineWords.push(words[from]); widths.push(mctx.measureText(words[from]).width); i = from + 1;
-    natural = widths[0];
-  }
-  return { lineWords, widths, spaceW, natural, nextFrom: i, endsParagraph: i >= words.length };
+  return { items, natural, spaceW, nextFrom: i, carry: newCarry, endsParagraph: i >= words.length && !newCarry };
 }
 
+// Cap on how far a justified space may stretch (× the natural space width),
+// so long thin columns don't develop rivers.
+const JUSTIFY_MAX_SPACE = 3.6;
+
 function positionLine(line, style, colW, isLast) {
-  const { lineWords, widths, spaceW, natural } = line;
-  const n = lineWords.length;
+  const { items, natural, spaceW } = line;
+  const n = items.length;
   let startX = 0, gap = spaceW;
   if (style.align === 'center') startX = (colW - natural) / 2;
   else if (style.align === 'right') startX = colW - natural;
-  else if (style.align === 'justify' && !isLast && n > 1) gap = spaceW + (colW - natural) / (n - 1);
+  else if (style.align === 'justify' && !isLast && n > 1) {
+    gap = spaceW + (colW - natural) / (n - 1);
+    if (gap > spaceW * JUSTIFY_MAX_SPACE) gap = spaceW * JUSTIFY_MAX_SPACE; // leave slightly short rather than gappy
+  }
   const tokens = [];
   let x = startX;
-  for (let k = 0; k < n; k++) {
-    tokens.push({ text: lineWords[k], x });
-    x += widths[k] + gap;
-  }
+  for (let k = 0; k < n; k++) { tokens.push({ text: items[k].text, x }); x += items[k].w + gap; }
   return tokens;
 }
 
@@ -160,7 +238,8 @@ export function layoutStory(chain, doc) {
   const paragraphs = raw.map((l) => resolveParagraph(l, base, doc));
 
   const byFrame = {};
-  let pIndex = 0, wIndex = 0;
+  const hyphenate = head.hyphenate !== false;
+  let pIndex = 0, wIndex = 0, carry = null;
   let overflow = false;
 
   for (let f = 0; f < chain.length; f++) {
@@ -181,14 +260,17 @@ export function layoutStory(chain, doc) {
         if (words.length === 0) { // blank line
           if (cursorY + lineH > col.y + col.h) break;
           cursorY += lineH;
-          pIndex++; wIndex = 0;
+          pIndex++; wIndex = 0; carry = null;
           continue;
         }
 
-        const isParaStart = wIndex === 0;
-        const line = buildLine(words, wIndex, style, col.w);
-        if (cursorY + lineH > col.y + col.h) break; // column full
-        const tokens = positionLine(line, style, col.w, line.endsParagraph);
+        const isParaStart = wIndex === 0 && carry == null;
+        const indent = isParaStart ? (style.firstLineIndent || 0) : 0;
+        const lineColW = Math.max(1, col.w - indent);
+        const line = buildLine(words, wIndex, carry, style, lineColW, hyphenate);
+        if (cursorY + lineH > col.y + col.h) break; // column full; carry/wIndex preserved for next column
+        let tokens = positionLine(line, style, lineColW, line.endsParagraph);
+        if (indent) tokens = tokens.map((t) => ({ text: t.text, x: t.x + indent }));
         const baseline = cursorY + style.size * 0.82;
         const placed = {
           tokens, baseline, x: col.x, font: fontString(style),
@@ -200,16 +282,14 @@ export function layoutStory(chain, doc) {
         if (isParaStart && para.indexTerms && para.indexTerms.length) placed.indexTerms = para.indexTerms;
         lines.push(placed);
         cursorY += lineH;
+        carry = line.carry;
 
         if (line.endsParagraph) {
           cursorY += style.spaceAfter || 0;
-          pIndex++; wIndex = 0;
+          pIndex++; wIndex = 0; carry = null;
         } else {
           wIndex = line.nextFrom;
         }
-      }
-      if (pIndex < paragraphs.length && cursorY === col.y) {
-        // nothing fit in this column at all (degenerate); avoid infinite loop
       }
     }
   }

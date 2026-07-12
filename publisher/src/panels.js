@@ -262,6 +262,9 @@ function buildPages() {
     num('In', s.margins.inside, (v) => setMargin('inside', v)),
     num('Out', s.margins.outside, (v) => setMargin('outside', v)),
   ]));
+  kids.push(el('div', { class: 'row' }, [
+    toggleBtn('Smart typography', s.smartTypography !== false, () => { begin('smart'); s.smartTypography = !(s.smartTypography !== false); commit('smart'); }),
+  ]));
 
   // master list
   kids.push(el('div', { class: 'muted', text: 'Master Pages' }));
@@ -365,6 +368,10 @@ function buildTextStyles() {
       num('Track', o.tracking || 0, (v) => applyToSelection('track', (s) => s.tracking = v), { step: 0.1 }),
       num('Gap', o.columnGap || 14, (v) => applyToSelection('gap', (s) => s.columnGap = v)),
     ]));
+    kids.push(el('div', { class: 'row' }, [
+      num('Indent', o.firstLineIndent || 0, (v) => applyToSelection('indent', (s) => s.firstLineIndent = Math.max(0, v)), { min: 0 }),
+      styleToggle('Hyphenate', o.hyphenate !== false, () => applyToSelection('hyphenate', (s) => s.hyphenate = !(s.hyphenate !== false))),
+    ]));
   } else {
     kids.push(el('div', { class: 'empty', text: 'Select a text frame to edit its formatting.' }));
   }
@@ -397,7 +404,7 @@ function alignBtn(a, current) {
     onclick: () => applyToSelection('align', (s) => s.align = a) }, icons[a]);
 }
 function copyStyleToFrame(ps, frame) {
-  for (const k of ['fontFamily', 'size', 'color', 'bold', 'italic', 'align', 'lineHeight', 'tracking']) frame[k] = ps[k];
+  for (const k of ['fontFamily', 'size', 'color', 'bold', 'italic', 'align', 'lineHeight', 'tracking', 'firstLineIndent']) frame[k] = ps[k];
 }
 
 /* ---- Color & swatches ---- */
@@ -997,7 +1004,7 @@ function createStyleFromSelection() {
   begin('new style');
   const ps = { id: uid('ps'), name: `Style ${store.doc.paragraphStyles.length + 1}`,
     fontFamily: o.fontFamily, size: o.size, color: o.color, bold: o.bold, italic: o.italic,
-    align: o.align, lineHeight: o.lineHeight, tracking: o.tracking || 0, spaceAfter: 4 };
+    align: o.align, lineHeight: o.lineHeight, tracking: o.tracking || 0, firstLineIndent: o.firstLineIndent || 0, spaceAfter: 4 };
   store.doc.paragraphStyles.push(ps);
   o.paraStyleId = ps.id;
   commit('new style');
@@ -1007,7 +1014,7 @@ function updateStyleFromSelection() {
   if (!o || !o.paraStyleId) return;
   begin('update style');
   const ps = store.doc.paragraphStyles.find((p) => p.id === o.paraStyleId);
-  if (ps) for (const k of ['fontFamily', 'size', 'color', 'bold', 'italic', 'align', 'lineHeight', 'tracking']) ps[k] = o[k];
+  if (ps) for (const k of ['fontFamily', 'size', 'color', 'bold', 'italic', 'align', 'lineHeight', 'tracking', 'firstLineIndent']) ps[k] = o[k];
   commit('update style');
 }
 

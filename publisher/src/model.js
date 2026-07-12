@@ -40,6 +40,7 @@ export function newDocument(opts = {}) {
       columns: 1,
       gutter: 14,
       units: 'pt',
+      smartTypography: true,
     },
     layers: [
       { id: layerId, name: 'Layer 1', visible: true, locked: false },
@@ -126,6 +127,8 @@ export function baseText(layerId) {
     align: 'left',
     lineHeight: 1.35,
     tracking: 0,
+    firstLineIndent: 0,
+    hyphenate: true,
     columns: 1,
     columnGap: 14,
     padding: 4,

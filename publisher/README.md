@@ -83,6 +83,15 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 ![Find and replace bar](docs/find.png)
 
+- **Typesetting** — justified body text is set with **hyphenation** (a
+  conservative English algorithm) and a **space-stretch cap**, so long thin
+  columns read cleanly instead of developing rivers. **Smart typography** turns
+  straight quotes curly and `--`/`---`/`...` into en/em dashes and an ellipsis, and
+  paragraphs support a **first-line indent** — all per-frame toggleable and applied
+  in every export.
+
+![Hyphenated, justified two-column body text](docs/typesetting.png)
+
 - **Paragraph styles** — apply, create-from-frame, and redefine; full character
   controls (font, size, leading, tracking, alignment incl. justify, colour).
 - **Vector objects** — rectangles (with corner radius), ellipses, lines, with
