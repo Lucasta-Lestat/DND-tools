@@ -224,6 +224,27 @@ export function makeIndex(layerId) {
   };
 }
 
+// A hex-grid world map. Each hex can carry a fill, a label, and a link
+// (page / anchor / url) to its details in the text.
+export function makeHexMap(layerId) {
+  return {
+    ...baseObject(layerId),
+    type: 'hexmap',
+    w: 360, h: 360,
+    cols: 8, rows: 9,
+    orientation: 'flat',        // 'flat' or 'pointy' top
+    gridColor: '#5a3d2b',
+    gridWidth: 1,
+    fill: '#f0e6d2',            // background paper (under any image)
+    src: null,                  // optional background map image (dataURL)
+    imageOpacity: 1,
+    labelMode: 'coord',         // 'coord' | 'none'
+    labelColor: '#5a3d2b',
+    labelSize: 7,
+    hexes: {},                  // sparse: "c,r" -> { fill?, label?, link? }
+  };
+}
+
 // A data table — ideal for random/roll tables (e.g. d20 → result).
 export function makeTable(layerId) {
   return {

@@ -18,6 +18,7 @@ export const store = {
     editingTextId: null,
     editingCell: null,  // { r, c } when editing a table cell
     tableRoll: null,    // { tableId, row, value } transient roll-table highlight
+    selectedHex: null,  // { mapId, c, r, key } selected hex on a hex map
     fillTarget: 'fill', // which attribute swatches apply to: 'fill' | 'stroke'
     masterEdit: null,   // master id currently being edited, or null for normal pages
   },

@@ -1,7 +1,7 @@
 // App bootstrap: build the default document, wire panels, canvas, rulers,
 // keyboard shortcuts, menu actions, and the render loop.
 import { store, subscribe, emit, begin, commit, findObject, undo, redo, resetHistory, getSpreads } from './store.js';
-import { newDocument, baseText, makeTable, makeToc, makeIndex, uid } from './model.js';
+import { newDocument, baseText, makeTable, makeToc, makeIndex, makeHexMap, uid } from './model.js';
 import { collectHeadings, collectIndex } from './textlayout.js';
 import { PERSONAS, TOOLS } from './personas.js';
 import {
@@ -189,6 +189,21 @@ function seedDocument() {
   index.entries = collectIndex(doc);
   index.h = indexContentHeight(index);
   indexPage.objects.push(index);
+
+  // A hex region map whose hexes link into the text (Ctrl/Cmd-click or double-click a hex).
+  const mapPage = { id: uid('P'), masterId: doc.masters[0].id, showMaster: true, objects: [] };
+  doc.pages.push(mapPage);
+  const mapHead = baseText(layerId);
+  Object.assign(mapHead, { x: 54, y: 70, w: doc.settings.pageWidth - 94, h: 36, text: '## The Veins — Region Map', size: 15, color: '#7a2d1f', bold: true, fontFamily: 'Georgia, serif' });
+  const hex = makeHexMap(layerId);
+  Object.assign(hex, { x: 54, y: 120, w: doc.settings.pageWidth - 108, h: doc.settings.pageHeight - 120 - 64, cols: 6, rows: 8 });
+  hex.hexes = {
+    '2,3': { fill: '#7bbf57', link: { type: 'anchor', target: 'wandering-table' } }, // → the roll table
+    '4,2': { fill: '#3da3a3', link: { type: 'page', target: '2' } },                  // → the bestiary
+    '1,5': { fill: '#c9b08a' },
+    '3,6': { fill: '#b455c9' },
+  };
+  mapPage.objects.push(mapHead, hex);
   return doc;
 }
 

@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle } from './renderer.js';
+import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle, hexGeometry, hexCenter, hexPoly, hexCoordLabel } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -175,7 +175,34 @@ function drawObjExport(g, obj, pl, imageMap) {
   if (obj.type === 'table') drawTableExport(g, obj);
   if (obj.type === 'toc') drawTocExport(g, obj);
   if (obj.type === 'index') drawIndexExport(g, obj);
+  if (obj.type === 'hexmap') drawHexMapExport(g, obj, imageMap);
   g.restore();
+}
+
+function drawHexMapExport(g, obj, imageMap) {
+  if (obj.fill) { g.fillStyle = obj.fill; g.fillRect(0, 0, obj.w, obj.h); }
+  if (obj.src && imageMap.get(obj.src)) {
+    const img = imageMap.get(obj.src);
+    g.save(); g.globalAlpha = obj.imageOpacity ?? 1; g.beginPath(); g.rect(0, 0, obj.w, obj.h); g.clip();
+    const s = Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
+    g.drawImage(img, (obj.w - img.naturalWidth * s) / 2, (obj.h - img.naturalHeight * s) / 2, img.naturalWidth * s, img.naturalHeight * s);
+    g.restore();
+  }
+  const geo = hexGeometry(obj);
+  g.lineWidth = obj.gridWidth || 1; g.strokeStyle = obj.gridColor || '#000';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+    const data = obj.hexes[`${c},${r}`];
+    const cn = hexCenter(geo, c, r);
+    const poly = hexPoly(cn.x, cn.y, geo.size, geo.pointy);
+    g.beginPath(); poly.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y))); g.closePath();
+    if (data && data.fill) { g.fillStyle = data.fill; g.fill(); }
+    g.stroke();
+    if (obj.labelMode !== 'none' && geo.size > 8) {
+      const label = (data && data.label) || hexCoordLabel(obj, c, r);
+      if (label) { g.fillStyle = obj.labelColor || '#333'; g.font = `${obj.labelSize || 7}px system-ui`; g.fillText(label, cn.x, cn.y - geo.size * 0.45); }
+    }
+  }
 }
 
 function clipTextTo(g, text, width) {
@@ -329,7 +356,7 @@ function filterString(a) {
 // Preload all images used anywhere, then call cb(map).
 function preloadImages(cb) {
   const srcs = new Set();
-  for (const c of [...store.doc.pages, ...store.doc.masters]) for (const o of c.objects) if (o.type === 'image' && o.src) srcs.add(o.src);
+  for (const c of [...store.doc.pages, ...store.doc.masters]) for (const o of c.objects) if ((o.type === 'image' || o.type === 'hexmap') && o.src) srcs.add(o.src);
   const map = new Map();
   let pending = srcs.size;
   if (!pending) return cb(map);
@@ -401,7 +428,28 @@ function svgForObject(obj, pl) {
   if (obj.type === 'table') return `<g${rot}${op}>${svgForTable(obj, x, y)}</g>`;
   if (obj.type === 'toc') return `<g${rot}${op}>${svgForToc(obj, x, y)}</g>`;
   if (obj.type === 'index') return `<g${rot}${op}>${svgForIndex(obj, x, y)}</g>`;
+  if (obj.type === 'hexmap') return `<g${rot}${op}>${svgForHexMap(obj, x, y)}</g>`;
   return '';
+}
+
+function svgForHexMap(obj, x, y) {
+  const geo = hexGeometry(obj);
+  let out = '';
+  if (obj.fill) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="${obj.fill}"/>`;
+  if (obj.src) out += `<image x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" preserveAspectRatio="xMidYMid slice" href="${obj.src}" opacity="${obj.imageOpacity ?? 1}"/>`;
+  for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+    const data = obj.hexes[`${c},${r}`];
+    const cn = hexCenter(geo, c, r);
+    const pts = hexPoly(cn.x, cn.y, geo.size, geo.pointy).map((p) => `${(x + p.x).toFixed(2)},${(y + p.y).toFixed(2)}`).join(' ');
+    let cell = `<polygon points="${pts}" fill="${data && data.fill ? data.fill : 'none'}" stroke="${obj.gridColor || '#000'}" stroke-width="${obj.gridWidth || 1}"/>`;
+    if (obj.labelMode !== 'none' && geo.size > 8) {
+      const label = (data && data.label) || hexCoordLabel(obj, c, r);
+      cell += `<text x="${(x + cn.x).toFixed(2)}" y="${(y + cn.y - geo.size * 0.3).toFixed(2)}" text-anchor="middle" font-family="system-ui" font-size="${obj.labelSize || 7}" fill="${obj.labelColor || '#333'}">${esc(label)}</text>`;
+    }
+    if (data && data.link && data.link.type === 'url') cell = `<a xlink:href="${esc(data.link.target)}" target="_blank">${cell}</a>`;
+    out += cell;
+  }
+  return out;
 }
 
 function svgForIndex(obj, x, y) {
@@ -531,6 +579,20 @@ function pdfOverlays(spread) {
         for (const row of L.rows) {
           if (row.kind !== 'entry' || !row.entry.pages.length) continue;
           out += `<a class="lnk" href="#apub-page-${row.entry.pages[0]}" style="left:${pl.ox + obj.x + row.x}pt;top:${obj.y + row.y}pt;width:${row.colW}pt;height:${row.h}pt"></a>`;
+        }
+      }
+      // Hex map: each linked hex is a clickable region (bounding box)
+      if (obj.type === 'hexmap') {
+        const geo = hexGeometry(obj);
+        for (const key in obj.hexes) {
+          const d = obj.hexes[key];
+          if (!d || !d.link) continue;
+          const href = linkHref(d.link);
+          if (!href) continue;
+          const [c, r] = key.split(',').map(Number);
+          const cn = hexCenter(geo, c, r); const s = geo.size;
+          const tgt = d.link.type === 'url' ? ' target="_blank"' : '';
+          out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x + cn.x - s}pt;top:${obj.y + cn.y - s}pt;width:${s * 2}pt;height:${s * 2}pt"></a>`;
         }
       }
     }

@@ -274,6 +274,8 @@ function drawObject(obj, pl, fromMaster) {
       if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, r.w, r.h); }
       if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, r.w, r.h); }
       drawIndex(obj);
+    } else if (obj.type === 'hexmap') {
+      drawHexMap(obj);
     }
   });
 }
@@ -628,6 +630,93 @@ function drawIndex(obj) {
     }
   }
   ctx.restore();
+}
+
+/* ---------- hex map ---------- */
+
+// Grid geometry that fits the hex grid inside the object bounds.
+export function hexGeometry(obj) {
+  const pointy = obj.orientation === 'pointy';
+  const cols = Math.max(1, obj.cols), rows = Math.max(1, obj.rows);
+  const S3 = Math.sqrt(3);
+  const sizeW = pointy ? obj.w / (S3 * (cols + 0.5)) : obj.w / (1.5 * cols + 0.5);
+  const sizeH = pointy ? obj.h / (1.5 * rows + 0.5) : obj.h / (S3 * (rows + 0.5));
+  const size = Math.max(1, Math.min(sizeW, sizeH));
+  const gridW = pointy ? size * S3 * (cols + 0.5) : size * (1.5 * cols + 0.5);
+  const gridH = pointy ? size * (1.5 * rows + 0.5) : size * S3 * (rows + 0.5);
+  return { pointy, size, cols, rows, offsetX: (obj.w - gridW) / 2, offsetY: (obj.h - gridH) / 2 };
+}
+
+export function hexCenter(geo, c, r) {
+  const { size, offsetX, offsetY, pointy } = geo, S3 = Math.sqrt(3);
+  if (!pointy) return { x: offsetX + size + c * 1.5 * size, y: offsetY + S3 * size * 0.5 + r * S3 * size + (c % 2 ? S3 * size * 0.5 : 0) };
+  return { x: offsetX + S3 * size * 0.5 + c * S3 * size + (r % 2 ? S3 * size * 0.5 : 0), y: offsetY + size + r * 1.5 * size };
+}
+
+export function hexPoly(cx, cy, size, pointy) {
+  const pts = []; const base = pointy ? 30 : 0;
+  for (let k = 0; k < 6; k++) { const a = (base + 60 * k) * Math.PI / 180; pts.push({ x: cx + size * Math.cos(a), y: cy + size * Math.sin(a) }); }
+  return pts;
+}
+
+export function hexCoordLabel(obj, c, r) {
+  return `${String(c + 1).padStart(2, '0')}${String(r + 1).padStart(2, '0')}`;
+}
+
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+// Which hex is under an object-local point (or null).
+export function hexAt(obj, lx, ly) {
+  const geo = hexGeometry(obj);
+  for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+    const cn = hexCenter(geo, c, r);
+    if (pointInPoly(lx, ly, hexPoly(cn.x, cn.y, geo.size, geo.pointy))) return { c, r, key: `${c},${r}` };
+  }
+  return null;
+}
+
+function tracePoly(g, poly) { g.beginPath(); poly.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y))); g.closePath(); }
+
+function drawHexMap(obj) {
+  if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, obj.w, obj.h); }
+  if (obj.src) {
+    const img = getImage(obj.src);
+    if (img && img.complete && img.naturalWidth) {
+      ctx.save(); ctx.globalAlpha *= (obj.imageOpacity ?? 1);
+      ctx.beginPath(); ctx.rect(0, 0, obj.w, obj.h); ctx.clip();
+      const s = Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
+      ctx.drawImage(img, (obj.w - img.naturalWidth * s) / 2, (obj.h - img.naturalHeight * s) / 2, img.naturalWidth * s, img.naturalHeight * s);
+      ctx.restore();
+    }
+  }
+  const geo = hexGeometry(obj);
+  ctx.lineWidth = obj.gridWidth || 1; ctx.strokeStyle = obj.gridColor || '#000';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+    const data = obj.hexes[`${c},${r}`];
+    const cn = hexCenter(geo, c, r);
+    tracePoly(ctx, hexPoly(cn.x, cn.y, geo.size, geo.pointy));
+    if (data && data.fill) { ctx.fillStyle = data.fill; ctx.fill(); }
+    ctx.stroke();
+    if (obj.labelMode !== 'none' && geo.size > 8) {
+      const label = (data && data.label) || hexCoordLabel(obj, c, r);
+      if (label) { ctx.fillStyle = obj.labelColor || '#333'; ctx.font = `${obj.labelSize || 7}px system-ui`; ctx.fillText(label, cn.x, cn.y - geo.size * 0.45); }
+    }
+    if (data && data.link) { ctx.beginPath(); ctx.arc(cn.x, cn.y + geo.size * 0.32, Math.max(1.2, geo.size * 0.09), 0, Math.PI * 2); ctx.fillStyle = '#2f81f7'; ctx.fill(); }
+  }
+  const sel = store.ui.selectedHex;
+  if (sel && sel.mapId === obj.id && sel.c < geo.cols && sel.r < geo.rows) {
+    const cn = hexCenter(geo, sel.c, sel.r);
+    tracePoly(ctx, hexPoly(cn.x, cn.y, geo.size, geo.pointy));
+    ctx.strokeStyle = '#2f81f7'; ctx.lineWidth = 2.5; ctx.stroke();
+  }
 }
 
 function drawPlaceholder(r) {

@@ -27,7 +27,7 @@ panels while editing the *same* pages:
 
 | Persona | Focus | Tools | Panels |
 | --- | --- | --- | --- |
-| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, **Contents**, **Index**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Table of Contents, Index, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
+| **Publisher** | Page layout & text | Move, Text Frame, Picture Frame, **Table**, **Contents**, **Index**, **Hex Map**, Rect, Ellipse, Line, **Link Text Frames**, **Hyperlink** | Transform, Hex Map, Table of Contents, Index, Table, Cross-References & Links, Pages, Layers, Text & Styles, Color |
 | **Designer** | Vector drawing | Move, Node, Rect, Ellipse, Line, Pen, Text | Transform, **Arrange & Align**, Layers, Color |
 | **Photo** | Raster images | Move, Picture Frame, Crop, Adjust | Transform, **Image Adjustments**, Layers |
 
@@ -43,6 +43,16 @@ Switch with the buttons or keys **1 / 2 / 3**.
   (threading)**: link frames with the chain tool and a story flows column-to-column
   and frame-to-frame. Lightweight markup — start a line with `# ` or `## ` for
   headings — lets one story mix styles.
+- **Hex map** — a **hyperlinked hex grid** for a world/region map. Flat- or
+  pointy-top hexes with coordinate labels (`0101`…), per-hex fill colour and
+  custom label, and an optional background map image. Each hex can **link to a
+  page, a named anchor, or a URL** — Ctrl/Cmd-click or double-click a hex to jump
+  to its details in the text, and links export as clickable regions in the PDF.
+  **Auto-link by coordinate** wires every hex to a text anchor named
+  `hex-<coord>` in one click.
+
+![Hyperlinked hex region map](docs/hexmap.png)
+
 - **Table of contents** — a generated **Contents** block built by scanning your
   `#`/`##`/`###` headings. Choose which levels to include, and give each heading
   level its **own style** — size, colour, bold/italic, indent, and whether it shows
@@ -117,7 +127,7 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 | | |
 | --- | --- |
-| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
+| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `G` Hex Map · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
 | `1` / `2` / `3` | Publisher / Designer / Photo persona |
 | `Ctrl/Cmd Z` · `Ctrl/Cmd Shift Z` | undo / redo |
 | `Ctrl/Cmd F` · `Ctrl/Cmd H` · `Ctrl/Cmd G` / `F3` | find · replace · find next |
@@ -178,6 +188,18 @@ Switch with the buttons or keys **1 / 2 / 3**.
    second. Rows now flow into the second frame and the **header row repeats** at
    the top of it. Chain as many frames as you need.
 
+## Hex map, quickly
+
+1. Pick the **Hex Map** tool (`G`) and drag out a grid (or click for a default).
+   Set columns/rows, orientation, colours, and an optional background image in the
+   **Hex Map** panel.
+2. Anchor each region's write-up in the text: select its heading/frame and name
+   the anchor `hex-0101`, `hex-0203`, … (Cross-References & Links panel).
+3. Click a hex, then either set its link directly (page / anchor / URL) or hit
+   **Auto-link by coordinate** to wire every hex whose `hex-<coord>` anchor exists.
+4. Ctrl/Cmd-click or double-click a hex to jump to its details; the links are
+   clickable in the exported PDF too.
+
 ## Cross-references, quickly
 
 - **Auto page numbers in text:** anchor the target object (select it → *Cross-
@@ -200,7 +222,7 @@ Plain ES modules, no framework:
 | `src/personas.js` | StudioLink personas and tool definitions |
 | `src/textlayout.js` | Knuth–Plass line breaking, columns, paragraph styles, threading, cross-reference tokens, heading & index collection |
 | `src/hyphenation.js` + `src/hyphenation-en.js` | Liang hyphenation engine + TeX en-US pattern data |
-| `src/renderer.js` | Canvas drawing, table pagination, TOC/index layout, hit-testing, selection chrome |
+| `src/renderer.js` | Canvas drawing, table pagination, TOC/index/hex-map layout, hit-testing, selection chrome |
 | `src/interaction.js` | Pointer tools: select/move/resize/rotate/create/thread/cell-edit/link |
 | `src/panels.js` | Persona switcher, tool strip, context bar, studio panels (incl. Table & Links) |
 | `src/find.js` | Document-wide find & replace over text frames and table cells |

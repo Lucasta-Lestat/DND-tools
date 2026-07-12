@@ -1,9 +1,9 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf, tocLevelStyle } from './renderer.js';
+import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf, tocLevelStyle, hexCoordLabel } from './renderer.js';
 import { uid, makePage, PAGE_PRESETS } from './model.js';
-import { startTextEdit, followLink, ensureAnchorName, regenerateToc, regenerateIndex } from './interaction.js';
+import { startTextEdit, followLink, navigateLink, ensureAnchorName, regenerateToc, regenerateIndex } from './interaction.js';
 
 const collapsed = new Set();
 
@@ -118,6 +118,7 @@ export function renderStudio() {
   const panels = PERSONAS[store.ui.persona].panels;
   const builders = {
     transform: buildTransform,
+    hexmap: buildHexMap,
     toc: buildToc,
     index: buildIndex,
     table: buildTable,
@@ -582,6 +583,117 @@ function levelToggle(o, level, label) {
       if (set.has(level)) set.delete(level); else set.add(level);
       t.levels = [...set].sort();
     }, true) }, label);
+}
+
+/* ---- Hex map ---- */
+function hexMutate(label, fn) {
+  const o = selectedObjects().find((s) => s.type === 'hexmap');
+  if (!o) return;
+  begin(label); fn(o); commit(label);
+}
+function ensureHex(map, key) { if (!map.hexes[key]) map.hexes[key] = {}; return map.hexes[key]; }
+function selectedHexOf(o) { const s = store.ui.selectedHex; return (s && s.mapId === o.id) ? s : null; }
+
+function buildHexMap() {
+  const o = selectedObjects().find((s) => s.type === 'hexmap');
+  if (!o) return section('hexmap', 'Hex Map', [el('div', { class: 'empty', text: 'Select a hex map (Map tool, G) to edit it.' })]);
+  const kids = [];
+  kids.push(el('div', { class: 'row' }, [
+    num('Cols', o.cols, (v) => hexMutate('cols', (m) => m.cols = Math.max(1, Math.round(v))), { min: 1 }),
+    num('Rows', o.rows, (v) => hexMutate('rows', (m) => m.rows = Math.max(1, Math.round(v))), { min: 1 }),
+    select(['flat', 'pointy'], o.orientation, (v) => hexMutate('orient', (m) => m.orientation = v)),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Grid' }),
+    colorInput(o.gridColor, (c) => hexMutate('gcolor', (m) => m.gridColor = c)),
+    num('W', o.gridWidth, (v) => hexMutate('gwidth', (m) => m.gridWidth = Math.max(0, v)), { min: 0, step: 0.5 }),
+  ]));
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Labels' }),
+    select(['coord', 'none'], o.labelMode, (v) => hexMutate('lmode', (m) => m.labelMode = v)),
+    num('Size', o.labelSize, (v) => hexMutate('lsize', (m) => m.labelSize = Math.max(4, v)), { min: 4, step: 0.5 }),
+    colorInput(o.labelColor, (c) => hexMutate('lcolor', (m) => m.labelColor = c)),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Paper' }),
+    colorInput(o.fill || '#f0e6d2', (c) => hexMutate('paper', (m) => m.fill = c)),
+    el('button', { class: 'mini', onclick: () => hexMutate('paper', (m) => m.fill = null) }, 'None'),
+  ]));
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { onclick: () => { store.ui._replaceTarget = o.id; document.getElementById('file-image').click(); } }, 'Map image…'),
+    o.src ? el('button', { onclick: () => hexMutate('img', (m) => m.src = null) }, 'Remove') : null,
+  ]));
+  if (o.src) kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Image' }),
+    el('input', { type: 'range', min: 0, max: 1, step: 0.05, value: o.imageOpacity ?? 1, oninput: (e) => { o.imageOpacity = parseFloat(e.target.value); drawScene(); }, onchange: () => emit() }),
+  ]));
+
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { class: 'on', title: 'Link each hex to a text anchor named hex-<coord>, where one exists', onclick: () => autoLinkHexes(o) }, 'Auto-link by coordinate'),
+  ]));
+  const linked = Object.values(o.hexes).filter((d) => d && d.link).length;
+  kids.push(el('div', { class: 'muted', text: `${linked} hex${linked === 1 ? '' : 'es'} linked · click a hex to edit it; Ctrl/Cmd-click or double-click to follow its link.` }));
+
+  const sel = selectedHexOf(o);
+  if (sel) {
+    const key = sel.key; const d = o.hexes[key] || {};
+    kids.push(el('div', { class: 'muted', html: `<b>Hex ${escapeHtml(hexCoordLabel(o, sel.c, sel.r))}</b>` }));
+    kids.push(el('div', { class: 'row split' }, [
+      el('label', { text: 'Fill' }),
+      colorInput(d.fill || '#c9b08a', (c) => hexMutate('hfill', (m) => ensureHex(m, key).fill = c)),
+      el('button', { class: 'mini', onclick: () => hexMutate('hfill', (m) => { if (m.hexes[key]) m.hexes[key].fill = null; }) }, 'None'),
+    ]));
+    kids.push(el('div', { class: 'row' }, [
+      el('label', { text: 'Label' }),
+      el('input', { class: 'grow', type: 'text', value: d.label || '', placeholder: hexCoordLabel(o, sel.c, sel.r), style: 'width:100%',
+        onchange: (e) => hexMutate('hlabel', (m) => { ensureHex(m, key).label = e.target.value || undefined; }) }),
+    ]));
+    for (const k of hexLinkEditor(o, key)) kids.push(k);
+    kids.push(el('div', { class: 'btnrow' }, [
+      el('button', { class: 'danger', onclick: () => { hexMutate('hclear', (m) => delete m.hexes[key]); store.ui.selectedHex = null; emit(); } }, 'Clear hex'),
+    ]));
+  } else {
+    kids.push(el('div', { class: 'muted', text: 'Click a hex to edit its fill and link.' }));
+  }
+  return section('hexmap', 'Hex Map', kids);
+}
+
+function hexLinkEditor(o, key) {
+  const d = o.hexes[key] || {};
+  const link = d.link || { type: 'none', target: '' };
+  const kids = [el('div', { class: 'row' }, [
+    el('label', { text: 'Links to' }),
+    select(['none', 'page', 'anchor', 'url'], link.type, (v) => hexMutate('hex link', (m) => ensureHex(m, key).link = v === 'none' ? null : { type: v, target: '' })),
+  ])];
+  if (link.type === 'page') kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Page' }),
+    el('input', { type: 'number', min: 1, max: store.doc.pages.length, value: link.target || 1,
+      onchange: (e) => hexMutate('hex link', (m) => ensureHex(m, key).link = { type: 'page', target: String(Math.max(1, Math.min(store.doc.pages.length, parseInt(e.target.value) || 1))) }) }),
+  ]));
+  else if (link.type === 'anchor') {
+    const anchors = anchorList();
+    kids.push(el('div', { class: 'row' }, [
+      el('label', { text: 'Target' }),
+      anchors.length
+        ? select(anchors, link.target || anchors[0], (v) => hexMutate('hex link', (m) => ensureHex(m, key).link = { type: 'anchor', target: v }))
+        : el('span', { class: 'muted', text: 'No anchors yet.' }),
+    ]));
+  } else if (link.type === 'url') kids.push(el('div', { class: 'row' }, [
+    el('input', { class: 'grow', type: 'text', value: link.target || '', placeholder: 'https://…', style: 'width:100%',
+      onchange: (e) => hexMutate('hex link', (m) => ensureHex(m, key).link = { type: 'url', target: e.target.value }) }),
+  ]));
+  if (d.link) kids.push(el('div', { class: 'btnrow' }, [el('button', { class: 'on', onclick: () => navigateLink(d.link) }, '↪ Follow')]));
+  return kids;
+}
+
+function autoLinkHexes(o) {
+  const anchors = new Set(anchorList());
+  hexMutate('auto-link hexes', (m) => {
+    for (let c = 0; c < m.cols; c++) for (let r = 0; r < m.rows; r++) {
+      const name = 'hex-' + hexCoordLabel(m, c, r);
+      if (anchors.has(name)) ensureHex(m, `${c},${r}`).link = { type: 'anchor', target: name };
+    }
+  });
 }
 
 /* ---- Index ---- */

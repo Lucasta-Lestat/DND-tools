@@ -2,14 +2,14 @@
 // thread text frames, edit text, and zoom/pan.
 import { store, begin, commit, emit, spreadObjects, getSpreads } from './store.js';
 import { TOOLS } from './personas.js';
-import { baseText, makeShape, makeImage, makeTable, makeToc, makeIndex } from './model.js';
+import { baseText, makeShape, makeImage, makeTable, makeToc, makeIndex, makeHexMap } from './model.js';
 import { collectHeadings, collectIndex } from './textlayout.js';
 import {
   screenToDoc, getPlacements, placementForPage, objectScreenCorners,
   hitTest, findOnSpread, drawScene, getView, fitView,
   tableCellAt, tableContentHeight, tableFrameLayout, tableChainOf,
   tocEntryAt, tocContentHeight,
-  indexEntryAt, indexContentHeight,
+  indexEntryAt, indexContentHeight, hexAt,
 } from './renderer.js';
 
 const scene = document.getElementById('scene');
@@ -133,6 +133,7 @@ function onPointerDown(e) {
     else if (tool.create === 'table') obj = makeTable(layerId);
     else if (tool.create === 'toc') obj = makeToc(layerId);
     else if (tool.create === 'index') obj = makeIndex(layerId);
+    else if (tool.create === 'hexmap') obj = makeHexMap(layerId);
     else obj = makeShape(tool.create, layerId, defaultFill(tool.create));
     obj.x = loc.x; obj.y = loc.y;
     if (!['table', 'toc', 'index'].includes(tool.create)) { obj.w = 1; obj.h = 1; }
@@ -144,10 +145,15 @@ function onPointerDown(e) {
     return;
   }
 
-  // Ctrl/Cmd-click a linked object to follow its hyperlink / cross-reference.
+  // Ctrl/Cmd-click a linked object (or hex) to follow its hyperlink.
   if (toolId === 'move' && (e.ctrlKey || e.metaKey)) {
     const hit = topmostAt(p.x, p.y);
-    if (hit && hit.obj.link) { followLink(hit.obj); return; }
+    if (hit && hit.obj.type === 'hexmap') {
+      const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+      const h = hexAt(hit.obj, local.x, local.y);
+      const d = h && hit.obj.hexes[h.key];
+      if (d && d.link) { navigateLink(d.link); return; }
+    } else if (hit && hit.obj.link) { followLink(hit.obj); return; }
   }
 
   // Move / select / transform
@@ -172,6 +178,12 @@ function onPointerDown(e) {
       else store.ui.selection = [...store.ui.selection, hit.obj.id];
     } else if (!store.ui.selection.includes(hit.obj.id)) {
       store.ui.selection = [hit.obj.id];
+    }
+    // track which hex was clicked, for the hex-map panel
+    if (hit.obj.type === 'hexmap') {
+      const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+      const hx = hexAt(hit.obj, local.x, local.y);
+      store.ui.selectedHex = hx ? { mapId: hit.obj.id, c: hx.c, r: hx.r, key: hx.key } : null;
     }
     begin('move');
     const docPt = screenToDoc(p.x, p.y);
@@ -251,6 +263,7 @@ function onPointerUp(e) {
     } else if (o.w < 4 && o.h < 4) { // click without drag -> default size
       if (drag.tool === 'text') { o.w = 200; o.h = 80; }
       else if (drag.tool === 'line') { o.w = 120; o.h = 0.5; }
+      else if (drag.tool === 'hexmap') { o.w = 320; o.h = 320; }
       else { o.w = 120; o.h = 120; }
     }
     commit('create');
@@ -421,9 +434,8 @@ export function goToPageNumber(n, selectId) {
   emit();
 }
 
-// Navigate the editor to an object's link target.
-export function followLink(obj) {
-  const link = obj.link;
+// Navigate the editor to a link target (page / anchor / url).
+export function navigateLink(link) {
   if (!link) return;
   if (link.type === 'url') { window.open(link.target, '_blank', 'noopener'); return; }
   if (link.type === 'anchor') {
@@ -433,6 +445,9 @@ export function followLink(obj) {
     goToPageNumber(parseInt(link.target, 10) || 1);
   }
 }
+
+// Navigate the editor to an object's link target.
+export function followLink(obj) { navigateLink(obj.link); }
 
 // (Re)build a table of contents by scanning headings and fitting its height.
 export function regenerateToc(obj) {
@@ -590,6 +605,11 @@ function onDblClick(e) {
     const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
     const ent = indexEntryAt(hit.obj, local.x, local.y);
     if (ent && ent.entry.pages.length) goToPageNumber(ent.entry.pages[0]);
+  } else if (hit.obj.type === 'hexmap') {
+    const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+    const hx = hexAt(hit.obj, local.x, local.y);
+    const d = hx && hit.obj.hexes[hx.key];
+    if (d && d.link) navigateLink(d.link);
   } else if (hit.obj.type === 'image') document.getElementById('file-image').click();
 }
 
