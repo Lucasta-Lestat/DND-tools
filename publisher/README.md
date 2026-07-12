@@ -83,12 +83,15 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 ![Find and replace bar](docs/find.png)
 
-- **Typesetting** — justified body text is set with **hyphenation** (a
-  conservative English algorithm) and a **space-stretch cap**, so long thin
-  columns read cleanly instead of developing rivers. **Smart typography** turns
-  straight quotes curly and `--`/`---`/`...` into en/em dashes and an ellipsis, and
-  paragraphs support a **first-line indent** — all per-frame toggleable and applied
-  in every export.
+- **Typesetting** — justified body text is set with **Knuth–Plass optimal line
+  breaking** (the algorithm TeX uses): it minimises total demerits across each
+  whole paragraph — balancing space stretch, hyphenation and consecutive-hyphen
+  penalties, and fitness classes — so columns read evenly with no rivers, instead
+  of the greedy line-at-a-time approach. **Hyphenation** points feed the breaker as
+  penalised optional breaks. Ragged text falls back to a fast greedy breaker.
+  **Smart typography** turns straight quotes curly and `--`/`---`/`...` into en/em
+  dashes and an ellipsis, and paragraphs support a **first-line indent** — all
+  per-frame toggleable and applied in every export.
 
 ![Hyphenated, justified two-column body text](docs/typesetting.png)
 

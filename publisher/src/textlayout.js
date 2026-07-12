@@ -208,92 +208,269 @@ function buildLine(words, from, carry, style, colW, hyphenate) {
   return { items, natural, spaceW, nextFrom: i, carry: newCarry, endsParagraph: i >= words.length && !newCarry };
 }
 
-// Cap on how far a justified space may stretch (× the natural space width),
-// so long thin columns don't develop rivers.
-const JUSTIFY_MAX_SPACE = 3.6;
-
-function positionLine(line, style, colW, isLast) {
-  const { items, natural, spaceW } = line;
-  const n = items.length;
-  let startX = 0, gap = spaceW;
-  if (style.align === 'center') startX = (colW - natural) / 2;
-  else if (style.align === 'right') startX = colW - natural;
-  else if (style.align === 'justify' && !isLast && n > 1) {
-    gap = spaceW + (colW - natural) / (n - 1);
-    if (gap > spaceW * JUSTIFY_MAX_SPACE) gap = spaceW * JUSTIFY_MAX_SPACE; // leave slightly short rather than gappy
-  }
-  const tokens = [];
-  let x = startX;
-  for (let k = 0; k < n; k++) { tokens.push({ text: items[k].text, x }); x += items[k].w + gap; }
-  return tokens;
+// Split a word into hyphenation fragments (they re-join to the word).
+function fragmentsOf(word, hyphenate) {
+  if (!(hyphenate && word.length >= 6 && /^[A-Za-z]+$/.test(word))) return [word];
+  const pts = hyphenatePoints(word);
+  if (!pts.length) return [word];
+  const frags = []; let prev = 0;
+  for (const p of pts) { frags.push(word.slice(prev, p)); prev = p; }
+  frags.push(word.slice(prev));
+  return frags;
 }
 
-// Lay out a whole thread chain (head holds the story text). Returns
-// { byFrame: { [id]: { lines } }, overflow: bool }.
+/* ---------- Knuth–Plass optimal line breaking ---------- */
+// Minimises total demerits over the whole paragraph (badness³ + penalties +
+// double-hyphen and fitness-class demerits) via DP over feasible breakpoints,
+// with hyphenation points offered as penalised optional breaks.
+const KPC = {
+  linePenalty: 10, hyphenPenalty: 50, doubleHyphen: 3000, fitnessDemerit: 100,
+  INF: 1e7, INF_BAD: 1e5, stretchRatio: 0.5, shrinkRatio: 1 / 3,
+};
+
+function knuthPlass(words, style, Lfun, hyphenate) {
+  setMeasureStyle(style);
+  const spaceW = mctx.measureText(' ').width;
+  const spaceY = spaceW * KPC.stretchRatio;
+  const spaceZ = spaceW * KPC.shrinkRatio;
+  const hyphenW = mctx.measureText('-').width;
+  const measure = (t) => mctx.measureText(t).width;
+
+  // sequence of boxes / glue / penalties
+  const seq = [];
+  words.forEach((word, j) => {
+    if (j > 0) seq.push({ t: 'glue', w: spaceW, y: spaceY, z: spaceZ });
+    fragmentsOf(word, hyphenate).forEach((frag, k) => {
+      if (k > 0) seq.push({ t: 'pen', w: hyphenW, p: KPC.hyphenPenalty, flag: true });
+      seq.push({ t: 'box', w: measure(frag), text: frag });
+    });
+  });
+  seq.push({ t: 'glue', w: 0, y: KPC.INF, z: 0 });   // final glue fills the last line
+  seq.push({ t: 'pen', w: 0, p: -KPC.INF, flag: false }); // forced break
+
+  const N = seq.length;
+  // prefix sums before item i (penalty width excluded — added only when broken)
+  const pW = [0], pY = [0], pZ = [0];
+  for (let i = 0; i < N; i++) {
+    const it = seq[i];
+    pW.push(pW[i] + (it.t === 'pen' ? 0 : it.w));
+    pY.push(pY[i] + (it.t === 'glue' ? it.y : 0));
+    pZ.push(pZ[i] + (it.t === 'glue' ? it.z : 0));
+  }
+  const isBreak = (i) => {
+    const it = seq[i];
+    if (it.t === 'pen') return it.p < KPC.INF;
+    if (it.t === 'glue') return i > 0 && seq[i - 1].t === 'box';
+    return false;
+  };
+  const fitnessOf = (r) => (r < -0.5 ? 0 : r < 0.5 ? 1 : r < 1 ? 2 : 3);
+
+  let active = [{ index: -1, line: 0, fitness: 1, demerits: 0, prev: null }];
+  let finalNode = null;
+
+  for (let b = 0; b < N; b++) {
+    if (!isBreak(b)) continue;
+    const it = seq[b];
+    const forced = it.t === 'pen' && it.p <= -KPC.INF;
+    const best = [null, null, null, null];
+    const bestD = [Infinity, Infinity, Infinity, Infinity];
+    let emergency = null, emergencyD = Infinity;
+    const survivors = [];
+
+    for (const a of active) {
+      const start = a.index + 1;
+      const endW = pW[b] + (it.t === 'pen' ? it.w : 0);
+      const lineW = endW - pW[start];
+      const lineY = pY[b] - pY[start];
+      const lineZ = pZ[b] - pZ[start];
+      const L = Lfun(a.line);
+      let r;
+      if (lineW < L) r = lineY > 0 ? (L - lineW) / lineY : KPC.INF;
+      else if (lineW > L) r = lineZ > 0 ? (L - lineW) / lineZ : -KPC.INF;
+      else r = 0;
+
+      if (r < -1 && !forced) {
+        // line too long even here — this node dies; remember as emergency
+        const base = KPC.linePenalty + KPC.INF_BAD;
+        const total = a.demerits + base * base;
+        if (total < emergencyD) { emergencyD = total; emergency = { index: b, line: a.line + 1, fitness: 1, demerits: total, prev: a }; }
+        continue; // do not keep `a`, do not spawn a normal candidate
+      }
+      if (!forced) survivors.push(a); // feasible so far — keep for later breakpoints
+
+      const badness = r < -1 ? KPC.INF_BAD : Math.min(KPC.INF_BAD, 100 * Math.abs(r) ** 3);
+      const base = KPC.linePenalty + badness;
+      const p = it.t === 'pen' ? it.p : 0;
+      let d;
+      if (forced) d = base * base;
+      else if (p >= 0) d = base * base + p * p;
+      else d = base * base - p * p;
+      if (it.flag && a.index >= 0 && seq[a.index].flag) d += KPC.doubleHyphen;
+      const fc = fitnessOf(r);
+      if (Math.abs(fc - a.fitness) > 1) d += KPC.fitnessDemerit;
+      const total = a.demerits + d;
+      if (total < bestD[fc]) { bestD[fc] = total; best[fc] = { index: b, line: a.line + 1, fitness: fc, demerits: total, prev: a }; }
+    }
+
+    if (forced) {
+      let bn = null;
+      for (let fc = 0; fc < 4; fc++) if (best[fc] && (!bn || best[fc].demerits < bn.demerits)) bn = best[fc];
+      finalNode = bn || emergency;
+      break;
+    }
+    for (let fc = 0; fc < 4; fc++) if (best[fc]) survivors.push(best[fc]);
+    active = survivors.length ? survivors : (emergency ? [emergency] : active);
+  }
+
+  // backtrack to breakpoint indices
+  const breaks = [];
+  for (let node = finalNode; node && node.index >= 0; node = node.prev) breaks.unshift(node.index);
+
+  // build lines
+  const lines = [];
+  let start = -1, lineNo = 0;
+  for (const b of breaks) {
+    const items = [];
+    let pendingSpace = false;
+    for (let i = start + 1; i < b; i++) {
+      const it = seq[i];
+      if (it.t === 'glue') pendingSpace = true;
+      else if (it.t === 'box') {
+        if (items.length && !pendingSpace) { const last = items[items.length - 1]; last.text += it.text; last.w += it.w; }
+        else items.push({ text: it.text, w: it.w, space: pendingSpace });
+        pendingSpace = false;
+      }
+    }
+    if (seq[b].t === 'pen' && seq[b].p > -KPC.INF && items.length) { const last = items[items.length - 1]; last.text += '-'; last.w += hyphenW; }
+    // adjustment ratio for this line
+    const startIdx = start + 1;
+    const endW = pW[b] + (seq[b].t === 'pen' ? seq[b].w : 0);
+    const lineW = endW - pW[startIdx];
+    const lineY = pY[b] - pY[startIdx], lineZ = pZ[b] - pZ[startIdx];
+    const L = Lfun(lineNo);
+    let r;
+    if (lineW < L) r = lineY > 0 ? (L - lineW) / lineY : 0;
+    else if (lineW > L) r = lineZ > 0 ? (L - lineW) / lineZ : 0;
+    else r = 0;
+    lines.push({ items, r, spaceW, spaceY, spaceZ, isLast: b === breaks[breaks.length - 1] });
+    start = b; lineNo++;
+  }
+  return lines;
+}
+
+// Greedy fallback (ragged text and over-long paragraphs), producing the same
+// line shape as knuthPlass so downstream positioning is uniform.
+function greedyBreak(words, style, Lfun, hyphenate) {
+  setMeasureStyle(style);
+  const spaceW = mctx.measureText(' ').width;
+  const out = [];
+  let wIndex = 0, carry = null;
+  while (wIndex < words.length || carry != null) {
+    const L = Lfun(out.length);
+    const line = buildLine(words, wIndex, carry, style, L, hyphenate);
+    const items = line.items.map((it, i) => ({ text: it.text, w: it.w, space: i > 0 }));
+    carry = line.carry; wIndex = line.nextFrom;
+    const isLast = line.endsParagraph;
+    out.push({ items, r: null, spaceW, isLast });
+    if (isLast) break;
+    if (!line.items.length && carry == null) break; // safety
+  }
+  return out;
+}
+
+// Break one paragraph into positioned lines (tokens x relative to the column,
+// including first-line indent). colW is the (uniform) column measure.
+function breakParagraph(para, colW, indent, hyphenate) {
+  const style = para.style;
+  const words = para.text.length ? para.text.split(/\s+/).filter(Boolean) : [];
+  const lineH = style.size * style.lineHeight;
+  const common = { lineH, size: style.size, font: fontString(style), color: style.color, tracking: style.tracking || 0 };
+  if (!words.length) return [{ spacer: true, ...common }];
+
+  const Lfun = (ln) => Math.max(1, colW - (ln === 0 ? indent : 0));
+  const justify = style.align === 'justify' && words.length <= 500;
+  const lines = justify ? knuthPlass(words, style, Lfun, hyphenate) : greedyBreak(words, style, Lfun, hyphenate);
+
+  setMeasureStyle(style);
+  const spaceW = mctx.measureText(' ').width;
+  return lines.map((ln, idx) => {
+    const off = idx === 0 ? indent : 0;
+    const tokens = [];
+    if (justify) {
+      const r = ln.r || 0;
+      let x = off;
+      for (const it of ln.items) {
+        if (it.space) x += spaceW + (r >= 0 ? r * ln.spaceY : r * ln.spaceZ);
+        tokens.push({ text: it.text, x }); x += it.w;
+      }
+    } else {
+      const natural = ln.items.reduce((s, it) => s + it.w + (it.space ? spaceW : 0), 0);
+      const L = Lfun(idx);
+      let x = off + (style.align === 'center' ? (L - natural) / 2 : style.align === 'right' ? (L - natural) : 0);
+      for (const it of ln.items) { if (it.space) x += spaceW; tokens.push({ text: it.text, x }); x += it.w; }
+    }
+    return { tokens, ...common, isLast: ln.isLast };
+  });
+}
+
+// Lay out a whole thread chain (head holds the story text). Optimised lines are
+// computed once at the head's column measure, then poured across the chain by
+// height. Returns { byFrame: { [id]: { lines } }, overflow: bool }.
 export function layoutStory(chain, doc) {
   const head = chain[0];
   const base = frameBaseStyle(head, doc);
   const anchorMap = buildAnchorPageMap(doc);
   const raw = resolveRefs(head.text || '', anchorMap).split('\n');
   const paragraphs = raw.map((l) => resolveParagraph(l, base, doc));
+  const hyphenate = head.hyphenate !== false;
+  const headColW = columnsOf(head)[0].w;
 
   const byFrame = {};
-  const hyphenate = head.hyphenate !== false;
-  let pIndex = 0, wIndex = 0, carry = null;
+  for (const frame of chain) byFrame[frame.id] = { lines: [] };
+
+  // pour cursor across frames/columns
+  let fi = 0, ci = 0;
+  let cols = columnsOf(chain[0]);
+  let cursorY = cols.length ? cols[0].y : 0;
   let overflow = false;
 
-  for (let f = 0; f < chain.length; f++) {
-    const frame = chain[f];
-    const cols = columnsOf(frame);
-    const lines = [];
-    byFrame[frame.id] = { lines };
-
-    for (let c = 0; c < cols.length && pIndex < paragraphs.length; c++) {
-      const col = cols[c];
-      let cursorY = col.y;
-      while (pIndex < paragraphs.length) {
-        const para = paragraphs[pIndex];
-        const style = para.style;
-        const words = para.text.length ? para.text.split(/\s+/).filter(Boolean) : [];
-        const lineH = style.size * style.lineHeight;
-
-        if (words.length === 0) { // blank line
-          if (cursorY + lineH > col.y + col.h) break;
-          cursorY += lineH;
-          pIndex++; wIndex = 0; carry = null;
-          continue;
-        }
-
-        const isParaStart = wIndex === 0 && carry == null;
-        const indent = isParaStart ? (style.firstLineIndent || 0) : 0;
-        const lineColW = Math.max(1, col.w - indent);
-        const line = buildLine(words, wIndex, carry, style, lineColW, hyphenate);
-        if (cursorY + lineH > col.y + col.h) break; // column full; carry/wIndex preserved for next column
-        let tokens = positionLine(line, style, lineColW, line.endsParagraph);
-        if (indent) tokens = tokens.map((t) => ({ text: t.text, x: t.x + indent }));
-        const baseline = cursorY + style.size * 0.82;
-        const placed = {
-          tokens, baseline, x: col.x, font: fontString(style),
-          color: style.color, tracking: style.tracking || 0,
-        };
-        // Tag the first line of a heading paragraph so the TOC can find it.
-        if (isParaStart && para.level) placed.heading = { level: para.level, text: para.text };
-        // Tag index marks to the first line so the index can find their page.
-        if (isParaStart && para.indexTerms && para.indexTerms.length) placed.indexTerms = para.indexTerms;
-        lines.push(placed);
-        cursorY += lineH;
-        carry = line.carry;
-
-        if (line.endsParagraph) {
-          cursorY += style.spaceAfter || 0;
-          pIndex++; wIndex = 0; carry = null;
-        } else {
-          wIndex = line.nextFrom;
-        }
+  const placeLine = (ln) => {
+    while (fi < chain.length) {
+      cols = columnsOf(chain[fi]);
+      if (ci >= cols.length) { fi++; ci = 0; if (fi < chain.length) cursorY = columnsOf(chain[fi])[0].y; continue; }
+      const col = cols[ci];
+      if (cursorY + ln.lineH > col.y + col.h) {
+        ci++;
+        if (ci < cols.length) cursorY = cols[ci].y;
+        else { fi++; ci = 0; if (fi < chain.length) cursorY = columnsOf(chain[fi])[0].y; }
+        continue;
       }
+      if (!ln.spacer) {
+        const placed = {
+          tokens: ln.tokens, baseline: cursorY + ln.size * 0.82, x: col.x,
+          font: ln.font, color: ln.color, tracking: ln.tracking,
+        };
+        if (ln.heading) placed.heading = ln.heading;
+        if (ln.indexTerms) placed.indexTerms = ln.indexTerms;
+        byFrame[chain[fi].id].lines.push(placed);
+      }
+      cursorY += ln.lineH + (ln.spaceAfter || 0);
+      return true;
     }
+    return false;
+  };
+
+  outer:
+  for (const para of paragraphs) {
+    const plines = breakParagraph(para, headColW, para.style.firstLineIndent || 0, hyphenate);
+    if (plines[0]) {
+      if (para.level) plines[0].heading = { level: para.level, text: para.text };
+      if (para.indexTerms && para.indexTerms.length) plines[0].indexTerms = para.indexTerms;
+    }
+    const lastLine = plines[plines.length - 1];
+    if (lastLine && !lastLine.spacer) lastLine.spaceAfter = para.style.spaceAfter || 0;
+    for (const ln of plines) { if (!placeLine(ln)) { overflow = true; break outer; } }
   }
-  if (pIndex < paragraphs.length) overflow = true;
   return { byFrame, overflow };
 }
 
