@@ -87,8 +87,9 @@ Switch with the buttons or keys **1 / 2 / 3**.
   breaking** (the algorithm TeX uses): it minimises total demerits across each
   whole paragraph — balancing space stretch, hyphenation and consecutive-hyphen
   penalties, and fitness classes — so columns read evenly with no rivers, instead
-  of the greedy line-at-a-time approach. **Hyphenation** points feed the breaker as
-  penalised optional breaks. Ragged text falls back to a fast greedy breaker.
+  of the greedy line-at-a-time approach. **Liang hyphenation** (the TeX en-US
+  pattern set — dictionary-quality break points) feeds the breaker as penalised
+  optional breaks. Ragged text falls back to a fast greedy breaker.
   **Smart typography** turns straight quotes curly and `--`/`---`/`...` into en/em
   dashes and an ellipsis, and paragraphs support a **first-line indent** — all
   per-frame toggleable and applied in every export.
@@ -195,7 +196,8 @@ Plain ES modules, no framework:
 | `src/store.js` | App state, spreads/derived selectors, undo-redo history |
 | `src/model.js` | Document/object factories, presets, default styles |
 | `src/personas.js` | StudioLink personas and tool definitions |
-| `src/textlayout.js` | Wrapping, columns, paragraph styles, threading, cross-reference tokens, heading & index collection |
+| `src/textlayout.js` | Knuth–Plass line breaking, columns, paragraph styles, threading, cross-reference tokens, heading & index collection |
+| `src/hyphenation.js` + `src/hyphenation-en.js` | Liang hyphenation engine + TeX en-US pattern data |
 | `src/renderer.js` | Canvas drawing, table pagination, TOC/index layout, hit-testing, selection chrome |
 | `src/interaction.js` | Pointer tools: select/move/resize/rotate/create/thread/cell-edit/link |
 | `src/panels.js` | Persona switcher, tool strip, context bar, studio panels (incl. Table & Links) |

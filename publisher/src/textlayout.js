@@ -7,6 +7,8 @@
 //   "### Heading" -> Heading 2 (used as a sub-head)
 // Everything else uses the frame's own style (or its assigned paragraph style).
 
+import { hyphenateWord } from './hyphenation.js';
+
 const measureCanvas = document.createElement('canvas');
 const mctx = measureCanvas.getContext('2d');
 
@@ -51,31 +53,10 @@ export function smartTypography(s) {
   return out;
 }
 
-// Conservative English hyphenation: returns break positions (prefix lengths).
-// Errs toward fewer, safer hyphens rather than aggressive splitting.
-const VOWELS = 'aeiouy';
-const isVowel = (ch) => VOWELS.indexOf(ch) !== -1;
-const HYPH_PREFIXES = ['inter', 'under', 'super', 'trans', 'multi', 'semi', 'anti', 'over', 'fore', 'counter', 're', 'un', 'in', 'im', 'dis', 'mis', 'non', 'pre', 'pro', 'con', 'com', 'sub', 'out', 'de', 'en', 'ex'];
-const HYPH_SUFFIXES = ['ations', 'ation', 'tions', 'tion', 'sions', 'sion', 'ings', 'ing', 'ments', 'ment', 'ness', 'able', 'ible', 'ful', 'less', 'ous', 'ive', 'ize', 'ise', 'ity', 'ent', 'ant', 'ence', 'ance', 'age', 'ward', 'ly', 'ers', 'est', 'ed', 'al', 'ic'];
-const HYPH_DIGRAPHS = new Set(['ch', 'sh', 'th', 'ph', 'wh', 'gh', 'ck', 'ng', 'qu', 'rh']);
-
+// Dictionary-quality hyphenation via Liang's algorithm (TeX en-US patterns).
+// Returns allowed break positions (prefix lengths); lmin/rmin = 2/3.
 export function hyphenatePoints(word) {
-  const w = word.toLowerCase();
-  const len = w.length;
-  const LMIN = 2, RMIN = 3;
-  if (len < 6) return [];
-  const pts = new Set();
-  // doubled consonant between vowels: run-ning, let-ter
-  for (let i = 1; i < len - 1; i++) {
-    if (w[i] === w[i + 1] && !isVowel(w[i]) && isVowel(w[i - 1]) && (i + 2 >= len || isVowel(w[i + 2]))) pts.add(i + 1);
-  }
-  // VCCV with differing consonants (not a digraph): win-dow, mon-ster
-  for (let i = 1; i < len - 2; i++) {
-    if (isVowel(w[i - 1]) && !isVowel(w[i]) && !isVowel(w[i + 1]) && isVowel(w[i + 2]) && w[i] !== w[i + 1] && !HYPH_DIGRAPHS.has(w[i] + w[i + 1])) pts.add(i + 1);
-  }
-  for (const p of HYPH_PREFIXES) if (w.startsWith(p) && len - p.length >= RMIN) pts.add(p.length);
-  for (const s of HYPH_SUFFIXES) if (w.endsWith(s) && len - s.length >= LMIN) pts.add(len - s.length);
-  return [...pts].filter((p) => p >= LMIN && len - p >= RMIN).sort((a, b) => a - b);
+  return hyphenateWord(word, 2, 3);
 }
 
 // Pull {index:Term} marks out of a line; they record an index entry but render
@@ -162,7 +143,7 @@ function buildLine(words, from, carry, style, colW, hyphenate) {
   const spaceW = mctx.measureText(' ').width;
   const hyphenW = mctx.measureText('-').width;
   const measure = (t) => mctx.measureText(t).width;
-  const canHyph = (wd) => hyphenate && wd.length >= 6 && /^[A-Za-z]+$/.test(wd);
+  const canHyph = (wd) => hyphenate && wd.length >= 5 && /^[A-Za-z]+$/.test(wd);
   // Largest hyphen prefix of `wd` whose text width fits `avail`, or null.
   const splitToFit = (wd, avail) => {
     if (!canHyph(wd) || avail <= 0) return null;
@@ -210,7 +191,7 @@ function buildLine(words, from, carry, style, colW, hyphenate) {
 
 // Split a word into hyphenation fragments (they re-join to the word).
 function fragmentsOf(word, hyphenate) {
-  if (!(hyphenate && word.length >= 6 && /^[A-Za-z]+$/.test(word))) return [word];
+  if (!(hyphenate && word.length >= 5 && /^[A-Za-z]+$/.test(word))) return [word];
   const pts = hyphenatePoints(word);
   if (!pts.length) return [word];
   const frags = []; let prev = 0;
