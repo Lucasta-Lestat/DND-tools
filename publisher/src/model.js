@@ -61,6 +61,7 @@ export function newDocument(opts = {}) {
     ],
     swatches: DEFAULT_SWATCHES.slice(),
     paragraphStyles: defaultParagraphStyles(),
+    navGroups: [],              // reusable ordered link sets for nav bars / running headers
   };
   return doc;
 }
@@ -244,6 +245,40 @@ export function makeHexMap(layerId) {
     labelColor: '#5a3d2b',
     labelSize: 7,
     hexes: {},                  // sparse: "c,r" -> { fill?, label?, link? }
+  };
+}
+
+// A reusable navigation group: an ordered list of destinations that one or
+// more nav bars render. Entries: { label, link:{ type:'page'|'anchor'|'url', target } }.
+export function makeNavGroup(name) {
+  return { id: uid('ng'), name: name || 'Navigation', entries: [] };
+}
+
+// A running header / side tab-strip that renders a nav group. The entry that
+// points at the page the bar sits on is bolded & highlighted (not a link);
+// every other entry is a live hyperlink.
+export function makeNavbar(layerId, groupId) {
+  return {
+    ...baseObject(layerId),
+    type: 'navbar',
+    w: 380, h: 24,
+    groupId: groupId || null,
+    orientation: 'horizontal',  // 'horizontal' (top bar) | 'vertical' (side bar)
+    align: 'left',              // horizontal: 'left' | 'center' | 'right'
+    fontFamily: 'Georgia, serif',
+    size: 10,
+    color: '#8a6d4f',           // link colour (non-current entries)
+    currentColor: '#2c2018',    // current-entry text colour (always bold)
+    currentFill: '#f0e6d2',     // highlight behind the current entry (or null)
+    separator: '·',             // drawn between horizontal entries (or '')
+    sepColor: '#c9b08a',
+    gap: 8,                     // space around separators / between rows
+    padding: 6,
+    lineHeight: 1.35,
+    underline: false,           // underline non-current links
+    fill: null,                 // bar background
+    stroke: null,
+    strokeWidth: 0,
   };
 }
 

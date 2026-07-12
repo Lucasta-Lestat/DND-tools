@@ -19,6 +19,7 @@ export const store = {
     editingCell: null,  // { r, c } when editing a table cell
     tableRoll: null,    // { tableId, row, value } transient roll-table highlight
     selectedHex: null,  // { mapId, c, r, key } selected hex on a hex map
+    lastNavGroup: null, // id of the nav group most recently used, for new nav bars
     fillTarget: 'fill', // which attribute swatches apply to: 'fill' | 'stroke'
     masterEdit: null,   // master id currently being edited, or null for normal pages
   },

@@ -1,7 +1,7 @@
 // App bootstrap: build the default document, wire panels, canvas, rulers,
 // keyboard shortcuts, menu actions, and the render loop.
 import { store, subscribe, emit, begin, commit, findObject, undo, redo, resetHistory, getSpreads } from './store.js';
-import { newDocument, baseText, makeTable, makeToc, makeIndex, makeHexMap, uid } from './model.js';
+import { newDocument, baseText, makeTable, makeToc, makeIndex, makeHexMap, makeNavbar, makeNavGroup, uid } from './model.js';
 import { collectHeadings, collectIndex } from './textlayout.js';
 import { PERSONAS, TOOLS } from './personas.js';
 import {
@@ -204,6 +204,33 @@ function seedDocument() {
     '3,6': { fill: '#b455c9' },
   };
   mapPage.objects.push(mapHead, hex);
+
+  // Level-up section: several trait tables sharing a running nav header. On each
+  // page the bar bolds that page's own table and hyperlinks to the others, so a
+  // reader can flip between all their advancement options.
+  const navGroup = makeNavGroup('Level-Up Tables');
+  doc.navGroups.push(navGroup);
+  const paths = [
+    { title: 'Martial Path', anchor: 'levelup-martial', color: '#7a2d1f',
+      rows: [['d20', 'Martial advancement'], ['1', '+1 to hit'], ['2', 'Cleave'], ['3', 'Second wind'], ['4', 'Riposte'], ['5', 'Shield-breaker']] },
+    { title: 'Arcane Path', anchor: 'levelup-arcane', color: '#3a2d6b',
+      rows: [['d20', 'Arcane advancement'], ['1', 'Cantrip'], ['2', 'Ward'], ['3', 'Blink step'], ['4', 'Read omens'], ['5', 'Bind spirit']] },
+    { title: 'Faithful Path', anchor: 'levelup-faithful', color: '#2d6b3a',
+      rows: [['d20', 'Faithful advancement'], ['1', 'Bless'], ['2', 'Mend'], ['3', 'Turn dread'], ['4', 'Sanctuary'], ['5', 'Commune']] },
+  ];
+  for (const path of paths) navGroup.entries.push({ label: path.title, link: { type: 'anchor', target: path.anchor } });
+  for (const path of paths) {
+    const pg = { id: uid('P'), masterId: doc.masters[0].id, showMaster: true, objects: [] };
+    doc.pages.push(pg);
+    const bar = makeNavbar(layerId, navGroup.id);
+    Object.assign(bar, { x: 54, y: 52, w: doc.settings.pageWidth - 94, h: 22, align: 'center', separator: '/', currentFill: '#f0e6d2', currentColor: path.color });
+    const head = baseText(layerId);
+    Object.assign(head, { x: 54, y: 88, w: doc.settings.pageWidth - 94, h: 30, text: `## ${path.title}`, anchorName: path.anchor, size: 16, color: path.color, bold: true, fontFamily: 'Georgia, serif' });
+    const tbl = makeTable(layerId);
+    Object.assign(tbl, { x: 54, y: 124, w: doc.settings.pageWidth - 94, colWeights: [1, 4], rows: path.rows, headerFill: path.color });
+    tbl.h = path.rows.length * (tbl.size * tbl.lineHeight + tbl.padding * 2);
+    pg.objects.push(bar, head, tbl);
+  }
   return doc;
 }
 

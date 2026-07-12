@@ -2,7 +2,7 @@
 // thread text frames, edit text, and zoom/pan.
 import { store, begin, commit, emit, spreadObjects, getSpreads } from './store.js';
 import { TOOLS } from './personas.js';
-import { baseText, makeShape, makeImage, makeTable, makeToc, makeIndex, makeHexMap } from './model.js';
+import { baseText, makeShape, makeImage, makeTable, makeToc, makeIndex, makeHexMap, makeNavbar, makeNavGroup } from './model.js';
 import { collectHeadings, collectIndex } from './textlayout.js';
 import {
   screenToDoc, getPlacements, placementForPage, objectScreenCorners,
@@ -10,6 +10,7 @@ import {
   tableCellAt, tableContentHeight, tableFrameLayout, tableChainOf,
   tocEntryAt, tocContentHeight,
   indexEntryAt, indexContentHeight, hexAt,
+  navEntryAt, navPageNumber,
 } from './renderer.js';
 
 const scene = document.getElementById('scene');
@@ -134,9 +135,10 @@ function onPointerDown(e) {
     else if (tool.create === 'toc') obj = makeToc(layerId);
     else if (tool.create === 'index') obj = makeIndex(layerId);
     else if (tool.create === 'hexmap') obj = makeHexMap(layerId);
+    else if (tool.create === 'navbar') obj = makeNavbar(layerId, defaultNavGroupId());
     else obj = makeShape(tool.create, layerId, defaultFill(tool.create));
     obj.x = loc.x; obj.y = loc.y;
-    if (!['table', 'toc', 'index'].includes(tool.create)) { obj.w = 1; obj.h = 1; }
+    if (!['table', 'toc', 'index', 'navbar'].includes(tool.create)) { obj.w = 1; obj.h = 1; }
     pl.page.objects.push(obj);
     store.ui.selection = [obj.id];
     drag = { mode: 'create', obj, pl, origin: loc, tool: tool.create };
@@ -153,6 +155,10 @@ function onPointerDown(e) {
       const h = hexAt(hit.obj, local.x, local.y);
       const d = h && hit.obj.hexes[h.key];
       if (d && d.link) { navigateLink(d.link); return; }
+    } else if (hit && hit.obj.type === 'navbar') {
+      const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+      const ent = navEntryAt(hit.obj, local.x, local.y, navPageNumber(hit.pl));
+      if (ent && !ent.item.current && ent.item.link) { navigateLink(ent.item.link); return; }
     } else if (hit && hit.obj.link) { followLink(hit.obj); return; }
   }
 
@@ -292,6 +298,20 @@ function insidePage(docPt, pl) {
 function defaultFill(type) {
   if (type === 'line') return null;
   return '#2f81f7';
+}
+
+// The nav group a freshly created nav bar should reference: the last-used one,
+// else the first existing group, else a brand-new empty group.
+function defaultNavGroupId() {
+  if (!store.doc.navGroups) store.doc.navGroups = [];
+  const groups = store.doc.navGroups;
+  const last = groups.find((g) => g.id === store.ui.lastNavGroup);
+  if (last) return last.id;
+  if (groups.length) return groups[0].id;
+  const g = makeNavGroup('Navigation 1');
+  groups.push(g);
+  store.ui.lastNavGroup = g.id;
+  return g.id;
 }
 
 /* ---------- resize / rotate math ---------- */
@@ -610,6 +630,10 @@ function onDblClick(e) {
     const hx = hexAt(hit.obj, local.x, local.y);
     const d = hx && hit.obj.hexes[hx.key];
     if (d && d.link) navigateLink(d.link);
+  } else if (hit.obj.type === 'navbar') {
+    const local = objectLocalPoint(hit.obj, hit.pl, p.x, p.y);
+    const ent = navEntryAt(hit.obj, local.x, local.y, navPageNumber(hit.pl));
+    if (ent && !ent.item.current && ent.item.link) navigateLink(ent.item.link);
   } else if (hit.obj.type === 'image') document.getElementById('file-image').click();
 }
 

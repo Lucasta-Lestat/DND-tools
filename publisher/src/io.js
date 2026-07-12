@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle, hexGeometry, hexCenter, hexPoly, hexCoordLabel, fittedRect, traceHexUnion } from './renderer.js';
+import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle, hexGeometry, hexCenter, hexPoly, hexCoordLabel, fittedRect, traceHexUnion, computeNavbarLayout } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -176,6 +176,7 @@ function drawObjExport(g, obj, pl, imageMap) {
   if (obj.type === 'toc') drawTocExport(g, obj);
   if (obj.type === 'index') drawIndexExport(g, obj);
   if (obj.type === 'hexmap') drawHexMapExport(g, obj, imageMap);
+  if (obj.type === 'navbar') drawNavbarExport(g, obj, pl);
   g.restore();
 }
 
@@ -205,6 +206,36 @@ function drawHexMapExport(g, obj, imageMap) {
       if (label) { g.fillStyle = obj.labelColor || '#333'; g.font = `${obj.labelSize || 7}px system-ui`; g.fillText(label, cn.x, cn.y - geo.size * 0.45); }
     }
   }
+}
+
+// 1-based page number an export placement sits on (0 if unknown).
+function navCurrentPage(pl) {
+  const i = store.doc.pages.findIndex((p) => p === pl.page);
+  return i >= 0 ? i + 1 : 0;
+}
+
+function drawNavbarExport(g, obj, pl) {
+  if (obj.fill) { g.fillStyle = obj.fill; g.fillRect(0, 0, obj.w, obj.h); }
+  if (obj.stroke && obj.strokeWidth > 0) { g.lineWidth = obj.strokeWidth; g.strokeStyle = obj.stroke; g.strokeRect(0, 0, obj.w, obj.h); }
+  const L = computeNavbarLayout(obj, navCurrentPage(pl));
+  g.save();
+  g.beginPath(); g.rect(0, 0, obj.w, obj.h); g.clip();
+  g.textBaseline = 'alphabetic';
+  for (const it of L.items) {
+    const base = it.y + (L.lineH - obj.size) / 2 + obj.size * 0.82;
+    if (it.current && obj.currentFill) { g.fillStyle = obj.currentFill; g.fillRect(it.x - 3, it.y + 1, it.w + 6, L.lineH - 2); }
+    if (!L.vertical && it.sepBefore && obj.separator) {
+      g.font = `400 ${obj.size}px ${obj.fontFamily}`; g.fillStyle = obj.sepColor || obj.color; g.textAlign = 'center';
+      g.fillText(obj.separator, it.sepX, base);
+    }
+    g.font = `${it.current ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    g.fillStyle = it.current ? (obj.currentColor || '#000') : (obj.color || '#333');
+    g.textAlign = 'left';
+    g.fillText(it.label, it.x, base);
+    if (!it.current && obj.underline && it.link) { g.strokeStyle = obj.color; g.lineWidth = 0.6; g.beginPath(); g.moveTo(it.x, base + 1.5); g.lineTo(it.x + it.w, base + 1.5); g.stroke(); }
+  }
+  g.textAlign = 'left';
+  g.restore();
 }
 
 function clipTextTo(g, text, width) {
@@ -431,7 +462,29 @@ function svgForObject(obj, pl) {
   if (obj.type === 'toc') return `<g${rot}${op}>${svgForToc(obj, x, y)}</g>`;
   if (obj.type === 'index') return `<g${rot}${op}>${svgForIndex(obj, x, y)}</g>`;
   if (obj.type === 'hexmap') return `<g${rot}${op}>${svgForHexMap(obj, x, y)}</g>`;
+  if (obj.type === 'navbar') return `<g${rot}${op}>${svgForNavbar(obj, x, y, pl)}</g>`;
   return '';
+}
+
+function svgForNavbar(obj, x, y, pl) {
+  const L = computeNavbarLayout(obj, navCurrentPage(pl));
+  let out = '';
+  if (obj.fill) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="${obj.fill}"/>`;
+  if (obj.stroke && obj.strokeWidth > 0) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="none" stroke="${obj.stroke}" stroke-width="${obj.strokeWidth}"/>`;
+  for (const it of L.items) {
+    const base = y + it.y + (L.lineH - obj.size) / 2 + obj.size * 0.82;
+    if (it.current && obj.currentFill) out += `<rect x="${(x + it.x - 3).toFixed(2)}" y="${(y + it.y + 1).toFixed(2)}" width="${(it.w + 6).toFixed(2)}" height="${(L.lineH - 2).toFixed(2)}" fill="${obj.currentFill}"/>`;
+    if (!L.vertical && it.sepBefore && obj.separator) {
+      out += `<text x="${(x + it.sepX).toFixed(2)}" y="${base.toFixed(2)}" text-anchor="middle" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}" fill="${obj.sepColor || obj.color}">${esc(obj.separator)}</text>`;
+    }
+    const weight = it.current ? ' font-weight="700"' : '';
+    const deco = (!it.current && obj.underline && it.link) ? ' text-decoration="underline"' : '';
+    const fill = it.current ? (obj.currentColor || '#000') : (obj.color || '#333');
+    let t = `<text x="${(x + it.x).toFixed(2)}" y="${base.toFixed(2)}" font-family="${esc(obj.fontFamily)}" font-size="${obj.size}"${weight}${deco} fill="${fill}">${esc(it.label)}</text>`;
+    if (!it.current && it.link) { const href = linkHref(it.link); if (href) { const tgt = it.link.type === 'url' ? ' target="_blank"' : ''; t = `<a xlink:href="${esc(href)}"${tgt}>${t}</a>`; } }
+    out += t;
+  }
+  return out;
 }
 
 function svgForHexMap(obj, x, y) {
@@ -596,6 +649,17 @@ function pdfOverlays(spread) {
         for (const row of L.rows) {
           if (row.kind !== 'entry' || !row.entry.pages.length) continue;
           out += `<a class="lnk" href="#apub-page-${row.entry.pages[0]}" style="left:${pl.ox + obj.x + row.x}pt;top:${obj.y + row.y}pt;width:${row.colW}pt;height:${row.h}pt"></a>`;
+        }
+      }
+      // Nav bar: each non-current entry is a rectangular link to its target.
+      if (obj.type === 'navbar') {
+        const L = computeNavbarLayout(obj, navCurrentPage(pl));
+        for (const it of L.items) {
+          if (it.current || !it.link) continue;
+          const href = linkHref(it.link);
+          if (!href) continue;
+          const tgt = it.link.type === 'url' ? ' target="_blank"' : '';
+          out += `<a class="lnk" href="${esc(href)}"${tgt} style="left:${pl.ox + obj.x + it.x}pt;top:${obj.y + it.y}pt;width:${it.w}pt;height:${it.h}pt"></a>`;
         }
       }
       // Hex map: PDF link annotations are rectangular, so approximate each linked

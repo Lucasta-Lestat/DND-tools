@@ -59,6 +59,19 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 ![Hyperlinked hex region map](docs/hexmap.png)
 
+- **Nav bar / running header** — a reusable navigation strip for cross-linked
+  sections. You build a **nav group** — an ordered list of destinations (e.g. all
+  the level-up tables *Martial · Arcane · Faithful*, or every subsection of a
+  faction) — and drop a nav bar that renders it as a **top header or side tab
+  strip**. The entry pointing at the page the bar sits on is **bold and
+  highlighted** (not a link); every other entry is a live **hyperlink**, so a
+  reader can flip between all the related tables or faction pages at a glance.
+  One group can be shared by many bars, so **Place on all target pages** drops the
+  same header onto every page the group references in one click, each
+  auto-highlighting its own page. Horizontal bars wrap and align (left/center/
+  right); entries export as clickable links in SVG and PDF. (The starter document
+  ships with a *Level-Up Tables* group across three trait pages.)
+
 - **Table of contents** — a generated **Contents** block built by scanning your
   `#`/`##`/`###` headings. Choose which levels to include, and give each heading
   level its **own style** — size, colour, bold/italic, indent, and whether it shows
@@ -133,7 +146,7 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 | | |
 | --- | --- |
-| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `G` Hex Map · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
+| `V` Move · `T` Text · `P` Picture · `B` Table · `C` Contents · `X` Index · `G` Hex Map · `U` Nav Bar · `M` Rect · `L` Ellipse · `\` Line · `K` Link frames · `H` Hyperlink | tools (per persona) |
 | `1` / `2` / `3` | Publisher / Designer / Photo persona |
 | `Ctrl/Cmd Z` · `Ctrl/Cmd Shift Z` | undo / redo |
 | `Ctrl/Cmd F` · `Ctrl/Cmd H` · `Ctrl/Cmd G` / `F3` | find · replace · find next |
@@ -207,6 +220,23 @@ Switch with the buttons or keys **1 / 2 / 3**.
    **Auto-link by coordinate** to wire every hex whose `hex-<coord>` anchor exists.
 4. Ctrl/Cmd-click or double-click a hex to jump to its details; the links are
    clickable in the exported PDF too.
+
+## Nav bars / running headers, quickly
+
+1. On any relevant page, anchor each destination: select its heading/frame and
+   name the anchor (e.g. `levelup-martial`, `belmonte-overview`,
+   `belmonte-encounters`) in the **Cross-References & Links** panel.
+2. Pick the **Nav Bar** tool (`U`) and drag a strip across the top (or down the
+   side). In the **Nav Bar** panel a new **group** is created — rename it (e.g.
+   *Belmonte* or *Level-Up Tables*).
+3. Add entries: type a label, choose **anchor** (or page / URL) and pick the
+   target. Shortcuts: **+ This page** adds the bar's own page; **From anchors…**
+   builds one entry per anchor sharing a prefix (e.g. `belmonte-`).
+4. Hit **Place on all target pages** to drop the same bar on every page the group
+   points to — each copy auto-bolds *its own* page and hyperlinks the rest.
+5. Ctrl/Cmd-click or double-click any entry to follow it (bars are clickable in
+   exported SVG/PDF). Switch **horizontal / vertical** and tune separators,
+   colours, and the current-entry highlight in the panel.
 
 ## Cross-references, quickly
 

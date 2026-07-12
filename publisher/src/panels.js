@@ -1,8 +1,8 @@
 // All chrome: persona switcher, tool strip, context bar, studio panels, status bar.
 import { store, begin, commit, emit, selectedObjects, getSpreads, findObject } from './store.js';
 import { PERSONAS, TOOLS } from './personas.js';
-import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf, tocLevelStyle, hexCoordLabel } from './renderer.js';
-import { uid, makePage, PAGE_PRESETS } from './model.js';
+import { fitView, drawScene, tableContentHeight, tocContentHeight, indexContentHeight, tableChainOf, tocLevelStyle, hexCoordLabel, navbarContentHeight } from './renderer.js';
+import { uid, makePage, makeNavGroup, PAGE_PRESETS } from './model.js';
 import { startTextEdit, followLink, navigateLink, ensureAnchorName, regenerateToc, regenerateIndex } from './interaction.js';
 
 const collapsed = new Set();
@@ -118,6 +118,7 @@ export function renderStudio() {
   const panels = PERSONAS[store.ui.persona].panels;
   const builders = {
     transform: buildTransform,
+    navbar: buildNavbar,
     hexmap: buildHexMap,
     toc: buildToc,
     index: buildIndex,
@@ -701,6 +702,196 @@ function autoLinkHexes(o) {
       if (anchors.has(name)) ensureHex(m, `${c},${r}`).link = { type: 'anchor', target: name };
     }
   });
+}
+
+/* ---- Nav bar / running header ---- */
+function selectedNavbar() { return selectedObjects().find((s) => s.type === 'navbar'); }
+function navGroupsList() { return store.doc.navGroups || (store.doc.navGroups = []); }
+function navGroupFor(o) { return navGroupsList().find((g) => g.id === o.groupId) || null; }
+
+function navMutate(label, fn, fit) {
+  const o = selectedNavbar(); if (!o) return;
+  begin(label); fn(o); if (fit) o.h = navbarContentHeight(o); commit(label);
+}
+function navGroupMutate(label, fn, fit) {
+  const o = selectedNavbar(); if (!o) return;
+  const g = navGroupFor(o); if (!g) return;
+  begin(label); fn(g, o); if (fit) o.h = navbarContentHeight(o); commit(label);
+}
+function pageNumberOfObject(o) {
+  const i = store.doc.pages.findIndex((p) => p.objects.includes(o));
+  return i >= 0 ? i + 1 : 0;
+}
+function pageHeadingLabel(pageIndex) {
+  const page = store.doc.pages[pageIndex];
+  if (!page) return `Page ${pageIndex + 1}`;
+  for (const ob of page.objects) {
+    if (ob.type === 'text' && ob.text) {
+      const m = ob.text.match(/^#{1,3}\s+(.+)$/m);
+      if (m) return m[1].trim();
+    }
+  }
+  return `Page ${pageIndex + 1}`;
+}
+function titleCaseWords(s) { return s.replace(/\b\w/g, (c) => c.toUpperCase()); }
+
+function buildNavbar() {
+  const o = selectedNavbar();
+  if (!o) return section('navbar', 'Nav Bar', [el('div', { class: 'empty', text: 'Select a nav bar (Nav Bar tool, U) to edit it.' })]);
+  const groups = navGroupsList();
+  const g = navGroupFor(o);
+  const kids = [];
+
+  // group picker + new group
+  const picker = groups.length
+    ? (() => {
+        const s = el('select', { onchange: (e) => { navMutate('nav group', (n) => n.groupId = e.target.value); store.ui.lastNavGroup = e.target.value; } });
+        for (const gr of groups) { const op = el('option', { value: gr.id, text: gr.name }); if (gr.id === o.groupId) op.selected = true; s.append(op); }
+        return s;
+      })()
+    : el('span', { class: 'muted', text: 'No groups yet.' });
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Group' }), picker,
+    el('button', { class: 'mini', title: 'New group', onclick: () => {
+      begin('new nav group'); const ng = makeNavGroup(`Navigation ${groups.length + 1}`); groups.push(ng); o.groupId = ng.id; store.ui.lastNavGroup = ng.id; commit('new nav group');
+    } }, '+ New'),
+  ]));
+
+  if (!g) {
+    kids.push(el('div', { class: 'muted', text: 'This nav bar has no group — pick or create one above.' }));
+    return section('navbar', 'Nav Bar', kids);
+  }
+
+  // rename / delete group
+  kids.push(el('div', { class: 'row' }, [
+    el('input', { class: 'grow', type: 'text', value: g.name, style: 'width:100%', title: 'Group name',
+      onchange: (e) => navGroupMutate('rename group', (gr) => gr.name = e.target.value || 'Navigation') }),
+    el('button', { class: 'mini danger', title: 'Delete this group', onclick: () => {
+      if (!confirm(`Delete nav group “${g.name}”? Bars using it will show nothing until reassigned.`)) return;
+      begin('delete nav group');
+      store.doc.navGroups = groups.filter((x) => x.id !== g.id);
+      for (const p of store.doc.pages) for (const ob of p.objects) if (ob.type === 'navbar' && ob.groupId === g.id) ob.groupId = null;
+      commit('delete nav group');
+    } }, '🗑'),
+  ]));
+
+  // entries
+  kids.push(el('div', { class: 'muted', text: `${g.entries.length} entries · the entry on the current page shows bold. Ctrl/Cmd- or double-click a bar to follow a link.` }));
+  g.entries.forEach((e, i) => {
+    kids.push(el('div', { class: 'row' }, [
+      el('input', { type: 'text', value: e.label || '', placeholder: 'Label', style: 'flex:1;min-width:0',
+        onchange: (ev) => navGroupMutate('nav label', (gr) => gr.entries[i].label = ev.target.value, true) }),
+      el('button', { class: 'mini', title: 'Up', onclick: () => navGroupMutate('nav reorder', (gr) => { if (i > 0) { const [x] = gr.entries.splice(i, 1); gr.entries.splice(i - 1, 0, x); } }) }, '↑'),
+      el('button', { class: 'mini', title: 'Down', onclick: () => navGroupMutate('nav reorder', (gr) => { if (i < gr.entries.length - 1) { const [x] = gr.entries.splice(i, 1); gr.entries.splice(i + 1, 0, x); } }) }, '↓'),
+      el('button', { class: 'mini danger', title: 'Remove', onclick: () => navGroupMutate('nav remove', (gr) => gr.entries.splice(i, 1), true) }, '×'),
+    ]));
+    kids.push(navEntryTarget(g, i));
+  });
+
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { onclick: () => navGroupMutate('add nav entry', (gr) => gr.entries.push({ label: 'New link', link: { type: 'page', target: String(pageNumberOfObject(o) || 1) } }), true) }, '+ Entry'),
+    el('button', { title: 'Add an entry pointing at this bar’s own page', onclick: () => {
+      const n = pageNumberOfObject(o) || 1;
+      navGroupMutate('add current page', (gr) => gr.entries.push({ label: pageHeadingLabel(n - 1), link: { type: 'page', target: String(n) } }), true);
+    } }, '+ This page'),
+    el('button', { title: 'Add an entry per anchor sharing a prefix', onclick: () => autofillNavFromPrefix(g) }, 'From anchors…'),
+  ]));
+
+  // layout
+  kids.push(el('div', { class: 'row' }, [
+    el('label', { text: 'Layout' }),
+    select(['horizontal', 'vertical'], o.orientation, (v) => navMutate('nav orient', (n) => n.orientation = v, true)),
+    select(['left', 'center', 'right'], o.align, (v) => navMutate('nav align', (n) => n.align = v)),
+  ]));
+
+  // styling
+  kids.push(el('div', { class: 'row' }, [
+    num('Size', o.size, (v) => navMutate('nav size', (n) => n.size = Math.max(5, v), true), { min: 5, step: 0.5 }),
+    num('Gap', o.gap, (v) => navMutate('nav gap', (n) => n.gap = Math.max(0, v), true), { min: 0 }),
+    el('div', { class: 'field' }, [el('label', { text: 'Sep' }),
+      el('input', { type: 'text', value: o.separator || '', maxlength: 3, style: 'width:40px',
+        onchange: (e) => navMutate('nav sep', (n) => n.separator = e.target.value, true) })]),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Link / current' }),
+    colorInput(o.color, (c) => navMutate('nav color', (n) => n.color = c)),
+    colorInput(o.currentColor, (c) => navMutate('nav ccolor', (n) => n.currentColor = c)),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Current bg' }),
+    colorInput(o.currentFill || '#f0e6d2', (c) => navMutate('nav cfill', (n) => n.currentFill = c)),
+    el('button', { class: 'mini', onclick: () => navMutate('nav cfill', (n) => n.currentFill = null) }, 'None'),
+    toggleBtn('Underline', !!o.underline, () => navMutate('nav underline', (n) => n.underline = !n.underline)),
+  ]));
+  kids.push(el('div', { class: 'row split' }, [
+    el('label', { text: 'Bar bg / sep' }),
+    colorInput(o.fill || '#ffffff', (c) => navMutate('nav fill', (n) => n.fill = c)),
+    el('button', { class: 'mini', onclick: () => navMutate('nav fill', (n) => n.fill = null) }, 'None'),
+    colorInput(o.sepColor || '#c9b08a', (c) => navMutate('nav sepcolor', (n) => n.sepColor = c)),
+  ]));
+
+  kids.push(el('div', { class: 'btnrow' }, [
+    el('button', { title: 'Resize height to fit the entries', onclick: () => navMutate('fit nav height', () => {}, true) }, 'Fit height'),
+    el('button', { class: 'on', title: 'Drop a copy of this bar on every page its entries point to', onclick: () => placeNavOnTargets(o, g) }, 'Place on all target pages'),
+  ]));
+
+  return section('navbar', 'Nav Bar', kids);
+}
+
+function navEntryTarget(g, i) {
+  const link = g.entries[i].link || { type: 'page', target: '' };
+  const kids = [
+    select(['page', 'anchor', 'url'], link.type, (v) => navGroupMutate('nav target', (gr) => gr.entries[i].link = { type: v, target: '' }, true)),
+  ];
+  if (link.type === 'page') {
+    kids.push(el('input', { type: 'number', min: 1, max: store.doc.pages.length, value: link.target || 1, style: 'width:56px',
+      onchange: (ev) => navGroupMutate('nav target', (gr) => gr.entries[i].link = { type: 'page', target: String(Math.max(1, Math.min(store.doc.pages.length, parseInt(ev.target.value) || 1))) }) }));
+  } else if (link.type === 'anchor') {
+    const anchors = anchorList();
+    kids.push(anchors.length
+      ? select(anchors, link.target || anchors[0], (v) => navGroupMutate('nav target', (gr) => gr.entries[i].link = { type: 'anchor', target: v }))
+      : el('span', { class: 'muted', text: 'No anchors yet' }));
+  } else {
+    kids.push(el('input', { type: 'text', value: link.target || '', placeholder: 'https://…', style: 'flex:1;min-width:0',
+      onchange: (ev) => navGroupMutate('nav target', (gr) => gr.entries[i].link = { type: 'url', target: ev.target.value }) }));
+  }
+  return el('div', { class: 'row', style: 'margin-left:14px' }, kids);
+}
+
+function autofillNavFromPrefix(g) {
+  const prefix = prompt('Add an entry for every anchor starting with this prefix (e.g. "belmonte-" or "levelup-"):', '');
+  if (!prefix) return;
+  const found = [];
+  store.doc.pages.forEach((p, pi) => { for (const ob of p.objects) if (ob.anchorName && ob.anchorName.startsWith(prefix)) found.push({ anchor: ob.anchorName, page: pi }); });
+  if (!found.length) { alert(`No anchors start with “${prefix}”.`); return; }
+  navGroupMutate('autofill nav', (gr) => {
+    for (const f of found) {
+      if (gr.entries.some((e) => e.link && e.link.type === 'anchor' && e.link.target === f.anchor)) continue;
+      const label = titleCaseWords(f.anchor.slice(prefix.length).replace(/[-_]+/g, ' ').trim()) || f.anchor;
+      gr.entries.push({ label, link: { type: 'anchor', target: f.anchor } });
+    }
+  }, true);
+}
+
+function placeNavOnTargets(o, g) {
+  const anchorPage = new Map();
+  store.doc.pages.forEach((p, i) => { for (const ob of p.objects) if (ob.anchorName) anchorPage.set(ob.anchorName, i); });
+  const targets = new Set();
+  for (const e of g.entries) {
+    if (!e.link) continue;
+    if (e.link.type === 'page') { const n = parseInt(e.link.target, 10); if (n) targets.add(n - 1); }
+    else if (e.link.type === 'anchor' && anchorPage.has(e.link.target)) targets.add(anchorPage.get(e.link.target));
+  }
+  begin('place nav bars');
+  let added = 0;
+  for (const pi of targets) {
+    const page = store.doc.pages[pi];
+    if (!page || page.objects.some((ob) => ob.type === 'navbar' && ob.groupId === g.id)) continue;
+    page.objects.push({ ...o, id: uid('o'), anchorName: '', link: null });
+    added++;
+  }
+  commit('place nav bars');
+  alert(added ? `Placed the nav bar on ${added} more page${added === 1 ? '' : 's'}.` : 'Every target page already has this nav bar.');
 }
 
 /* ---- Index ---- */

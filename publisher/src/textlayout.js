@@ -37,6 +37,12 @@ export function frameBaseStyle(frame, doc) {
   };
 }
 
+// Measured width of a single run of text in a given style (no wrapping).
+export function textWidth(text, style) {
+  setMeasureStyle(style);
+  return mctx.measureText(text || '').width;
+}
+
 /* ---------- typographic niceties ---------- */
 
 // Straight quotes → curly, -- → en dash, --- → em dash, ... → ellipsis.

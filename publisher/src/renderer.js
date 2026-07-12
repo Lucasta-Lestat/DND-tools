@@ -1,6 +1,6 @@
 // Canvas renderer for the active spread.
 import { store, activeSpread, spreadObjects, layerById } from './store.js';
-import { layoutStory, wrapText } from './textlayout.js';
+import { layoutStory, wrapText, textWidth, buildAnchorPageMap } from './textlayout.js';
 
 const scene = document.getElementById('scene');
 const ctx = scene.getContext('2d');
@@ -276,6 +276,8 @@ function drawObject(obj, pl, fromMaster) {
       drawIndex(obj);
     } else if (obj.type === 'hexmap') {
       drawHexMap(obj);
+    } else if (obj.type === 'navbar') {
+      drawNavbar(obj, pl);
     }
   });
 }
@@ -629,6 +631,128 @@ function drawIndex(obj) {
       ctx.fillText(clipToWidth(`${e.term}, ${e.pages.join(', ')}`, row.colW), row.x, baseline);
     }
   }
+  ctx.restore();
+}
+
+/* ---------- nav bar / running header ---------- */
+
+export function navGroupOf(obj) {
+  return (store.doc.navGroups || []).find((g) => g.id === obj.groupId) || null;
+}
+
+// 1-based page number a placement sits on (0 for masters / unknown).
+export function navPageNumber(pl) {
+  const i = store.doc.pages.findIndex((p) => p === pl.page);
+  return i >= 0 ? i + 1 : 0;
+}
+
+// The page a nav entry points at (or null for URLs / unresolved anchors).
+function resolveEntryPage(link, anchorMap) {
+  if (!link) return null;
+  if (link.type === 'page') return parseInt(link.target, 10) || null;
+  if (link.type === 'anchor') return anchorMap.get(link.target) ?? null;
+  return null;
+}
+
+// Lay out a nav bar's entries (object-local pts). currentPage marks which
+// entry (if any) is the one on the reader's current page — it renders bold and
+// non-clickable. Horizontal bars wrap and honour alignment; vertical bars stack.
+export function computeNavbarLayout(obj, currentPage) {
+  const pad = obj.padding ?? 6;
+  const size = obj.size || 10;
+  const lineH = size * (obj.lineHeight || 1.3);
+  const gap = obj.gap ?? 8;
+  const group = navGroupOf(obj);
+  const entries = group ? group.entries : [];
+  const anchorMap = buildAnchorPageMap(store.doc);
+  const sep = obj.separator || '';
+  const sepW = sep ? textWidth(sep, { fontFamily: obj.fontFamily, size, bold: false }) : 0;
+
+  const items = entries.map((e) => {
+    const page = resolveEntryPage(e.link, anchorMap);
+    const current = page != null && page === currentPage;
+    const w = textWidth(e.label || '', { fontFamily: obj.fontFamily, size, bold: current });
+    return { label: e.label || '', link: e.link, current, w };
+  });
+
+  if (obj.orientation === 'vertical') {
+    let y = pad;
+    for (const it of items) { it.x = pad; it.y = y; it.h = lineH; it.w = Math.max(it.w, obj.w - pad * 2); it.sepBefore = false; y += lineH; }
+    return { items, pad, lineH, totalW: obj.w, totalH: y + pad, vertical: true };
+  }
+
+  // horizontal: greedily pack into wrapped lines
+  const maxW = Math.max(1, obj.w - pad * 2);
+  const lines = [[]];
+  let cur = lines[0], x = 0;
+  for (const it of items) {
+    const lead = cur.length ? sepW + gap * 2 : 0; // separator + surrounding gaps
+    if (cur.length && x + lead + it.w > maxW) { cur = []; lines.push(cur); x = 0; it._lead = 0; }
+    else it._lead = lead;
+    x += it._lead + it.w;
+    cur.push(it);
+  }
+  const align = obj.align || 'left';
+  let y = pad;
+  for (const ln of lines) {
+    const lineW = ln.reduce((s, it) => s + it._lead + it.w, 0);
+    const slack = maxW - lineW;
+    let cx = pad + (align === 'center' ? Math.max(0, slack / 2) : align === 'right' ? Math.max(0, slack) : 0);
+    for (const it of ln) {
+      cx += it._lead;
+      it.x = cx; it.y = y; it.h = lineH;
+      it.sepBefore = it._lead > 0;
+      it.sepX = it.x - it._lead / 2;
+      cx += it.w;
+    }
+    y += lineH;
+  }
+  return { items, pad, lineH, totalW: obj.w, totalH: y + pad, vertical: false };
+}
+
+// Height a nav bar needs for its current width (for auto-fit).
+export function navbarContentHeight(obj) { return computeNavbarLayout(obj, -1).totalH; }
+
+// Which nav entry sits under an object-local point (or null).
+export function navEntryAt(obj, lx, ly, currentPage) {
+  const L = computeNavbarLayout(obj, currentPage);
+  for (let i = 0; i < L.items.length; i++) {
+    const it = L.items[i];
+    if (lx >= it.x - 2 && lx <= it.x + it.w + 2 && ly >= it.y && ly <= it.y + it.h) return { index: i, item: it };
+  }
+  return null;
+}
+
+function drawNavbar(obj, pl) {
+  if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, obj.w, obj.h); }
+  if (obj.stroke && obj.strokeWidth > 0) { ctx.lineWidth = obj.strokeWidth; ctx.strokeStyle = obj.stroke; ctx.strokeRect(0, 0, obj.w, obj.h); }
+  const currentPage = navPageNumber(pl);
+  const L = computeNavbarLayout(obj, currentPage);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, obj.w, obj.h); ctx.clip();
+  ctx.textBaseline = 'alphabetic';
+  for (const it of L.items) {
+    const base = it.y + (L.lineH - obj.size) / 2 + obj.size * 0.82;
+    if (it.current && obj.currentFill) {
+      ctx.fillStyle = obj.currentFill;
+      ctx.fillRect(it.x - 3, it.y + 1, it.w + 6, L.lineH - 2);
+    }
+    if (!L.vertical && it.sepBefore && obj.separator) {
+      ctx.font = `400 ${obj.size}px ${obj.fontFamily}`;
+      ctx.fillStyle = obj.sepColor || obj.color;
+      ctx.textAlign = 'center';
+      ctx.fillText(obj.separator, it.sepX, base);
+    }
+    ctx.font = `${it.current ? '700 ' : '400 '}${obj.size}px ${obj.fontFamily}`;
+    ctx.fillStyle = it.current ? (obj.currentColor || '#000') : (obj.color || '#333');
+    ctx.textAlign = 'left';
+    ctx.fillText(it.label, it.x, base);
+    if (!it.current && obj.underline && it.link) {
+      ctx.strokeStyle = obj.color; ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(it.x, base + 1.5); ctx.lineTo(it.x + it.w, base + 1.5); ctx.stroke();
+    }
+  }
+  ctx.textAlign = 'left';
   ctx.restore();
 }
 
