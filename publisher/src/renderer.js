@@ -644,7 +644,26 @@ export function hexGeometry(obj) {
   const size = Math.max(1, Math.min(sizeW, sizeH));
   const gridW = pointy ? size * S3 * (cols + 0.5) : size * (1.5 * cols + 0.5);
   const gridH = pointy ? size * (1.5 * rows + 0.5) : size * S3 * (rows + 0.5);
-  return { pointy, size, cols, rows, offsetX: (obj.w - gridW) / 2, offsetY: (obj.h - gridH) / 2 };
+  return { pointy, size, cols, rows, gridW, gridH, offsetX: (obj.w - gridW) / 2, offsetY: (obj.h - gridH) / 2 };
+}
+
+// Destination rect for an image fitted into (x,y,w,h) with a fit mode.
+export function fittedRect(iw, ih, x, y, w, h, fit) {
+  if (fit === 'stretch') return { dx: x, dy: y, dw: w, dh: h };
+  const s = fit === 'contain' ? Math.min(w / iw, h / ih) : Math.max(w / iw, h / ih);
+  const dw = iw * s, dh = ih * s;
+  return { dx: x + (w - dw) / 2, dy: y + (h - dh) / 2, dw, dh };
+}
+
+// Add every hexagon as a subpath (their union) for use as a clip region.
+export function traceHexUnion(g, obj, geo) {
+  g.beginPath();
+  for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+    const cn = hexCenter(geo, c, r);
+    const poly = hexPoly(cn.x, cn.y, geo.size, geo.pointy);
+    poly.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
+    g.closePath();
+  }
 }
 
 export function hexCenter(geo, c, r) {
@@ -685,18 +704,20 @@ export function hexAt(obj, lx, ly) {
 function tracePoly(g, poly) { g.beginPath(); poly.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y))); g.closePath(); }
 
 function drawHexMap(obj) {
+  const geo = hexGeometry(obj);
   if (obj.fill) { ctx.fillStyle = obj.fill; ctx.fillRect(0, 0, obj.w, obj.h); }
   if (obj.src) {
     const img = getImage(obj.src);
     if (img && img.complete && img.naturalWidth) {
       ctx.save(); ctx.globalAlpha *= (obj.imageOpacity ?? 1);
-      ctx.beginPath(); ctx.rect(0, 0, obj.w, obj.h); ctx.clip();
-      const s = Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
-      ctx.drawImage(img, (obj.w - img.naturalWidth * s) / 2, (obj.h - img.naturalHeight * s) / 2, img.naturalWidth * s, img.naturalHeight * s);
+      // confine the image to the grid — either its bounding box or the hex union
+      if (obj.clipToHexes) traceHexUnion(ctx, obj, geo); else ctx.beginPath(), ctx.rect(geo.offsetX, geo.offsetY, geo.gridW, geo.gridH);
+      ctx.clip();
+      const f = fittedRect(img.naturalWidth, img.naturalHeight, geo.offsetX, geo.offsetY, geo.gridW, geo.gridH, obj.imageFit || 'cover');
+      ctx.drawImage(img, f.dx, f.dy, f.dw, f.dh);
       ctx.restore();
     }
   }
-  const geo = hexGeometry(obj);
   ctx.lineWidth = obj.gridWidth || 1; ctx.strokeStyle = obj.gridColor || '#000';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {

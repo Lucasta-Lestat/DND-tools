@@ -1,7 +1,7 @@
 // Save / load projects and export to PNG, SVG, and print-to-PDF.
 import { store, emit, begin, commit as storeCommit, resetHistory, getSpreads } from './store.js';
 import { makeImage } from './model.js';
-import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle, hexGeometry, hexCenter, hexPoly, hexCoordLabel } from './renderer.js';
+import { fitView, computeTocLayout, computeIndexLayout, tableFrameLayout, tocLevelStyle, hexGeometry, hexCenter, hexPoly, hexCoordLabel, fittedRect, traceHexUnion } from './renderer.js';
 import { layoutStory, wrapText } from './textlayout.js';
 
 /* ---------- save / open ---------- */
@@ -180,15 +180,17 @@ function drawObjExport(g, obj, pl, imageMap) {
 }
 
 function drawHexMapExport(g, obj, imageMap) {
+  const geo = hexGeometry(obj);
   if (obj.fill) { g.fillStyle = obj.fill; g.fillRect(0, 0, obj.w, obj.h); }
   if (obj.src && imageMap.get(obj.src)) {
     const img = imageMap.get(obj.src);
-    g.save(); g.globalAlpha = obj.imageOpacity ?? 1; g.beginPath(); g.rect(0, 0, obj.w, obj.h); g.clip();
-    const s = Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
-    g.drawImage(img, (obj.w - img.naturalWidth * s) / 2, (obj.h - img.naturalHeight * s) / 2, img.naturalWidth * s, img.naturalHeight * s);
+    g.save(); g.globalAlpha = obj.imageOpacity ?? 1;
+    if (obj.clipToHexes) traceHexUnion(g, obj, geo); else { g.beginPath(); g.rect(geo.offsetX, geo.offsetY, geo.gridW, geo.gridH); }
+    g.clip();
+    const f = fittedRect(img.naturalWidth, img.naturalHeight, geo.offsetX, geo.offsetY, geo.gridW, geo.gridH, obj.imageFit || 'cover');
+    g.drawImage(img, f.dx, f.dy, f.dw, f.dh);
     g.restore();
   }
-  const geo = hexGeometry(obj);
   g.lineWidth = obj.gridWidth || 1; g.strokeStyle = obj.gridColor || '#000';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
@@ -436,7 +438,22 @@ function svgForHexMap(obj, x, y) {
   const geo = hexGeometry(obj);
   let out = '';
   if (obj.fill) out += `<rect x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" fill="${obj.fill}"/>`;
-  if (obj.src) out += `<image x="${x}" y="${y}" width="${obj.w}" height="${obj.h}" preserveAspectRatio="xMidYMid slice" href="${obj.src}" opacity="${obj.imageOpacity ?? 1}"/>`;
+  if (obj.src) {
+    const par = obj.imageFit === 'stretch' ? 'none' : obj.imageFit === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice';
+    const ix = x + geo.offsetX, iy = y + geo.offsetY;
+    let clipAttr = '';
+    if (obj.clipToHexes) {
+      const cid = `hexclip-${obj.id}`;
+      let cp = `<clipPath id="${cid}">`;
+      for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
+        const cn = hexCenter(geo, c, r);
+        cp += `<polygon points="${hexPoly(cn.x, cn.y, geo.size, geo.pointy).map((p) => `${(x + p.x).toFixed(2)},${(y + p.y).toFixed(2)}`).join(' ')}"/>`;
+      }
+      out += cp + '</clipPath>';
+      clipAttr = ` clip-path="url(#${cid})"`;
+    }
+    out += `<image x="${ix}" y="${iy}" width="${geo.gridW}" height="${geo.gridH}" preserveAspectRatio="${par}" href="${obj.src}" opacity="${obj.imageOpacity ?? 1}"${clipAttr}/>`;
+  }
   for (let c = 0; c < geo.cols; c++) for (let r = 0; r < geo.rows; r++) {
     const data = obj.hexes[`${c},${r}`];
     const cn = hexCenter(geo, c, r);

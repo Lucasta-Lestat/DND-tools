@@ -238,6 +238,8 @@ export function makeHexMap(layerId) {
     fill: '#f0e6d2',            // background paper (under any image)
     src: null,                  // optional background map image (dataURL)
     imageOpacity: 1,
+    imageFit: 'cover',          // fit the image into the grid: 'cover' | 'contain' | 'stretch'
+    clipToHexes: false,         // mask the image to the hex shapes
     labelMode: 'coord',         // 'coord' | 'none'
     labelColor: '#5a3d2b',
     labelSize: 7,

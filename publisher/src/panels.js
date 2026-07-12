@@ -623,10 +623,17 @@ function buildHexMap() {
     el('button', { onclick: () => { store.ui._replaceTarget = o.id; document.getElementById('file-image').click(); } }, 'Map image…'),
     o.src ? el('button', { onclick: () => hexMutate('img', (m) => m.src = null) }, 'Remove') : null,
   ]));
-  if (o.src) kids.push(el('div', { class: 'row split' }, [
-    el('label', { text: 'Image' }),
-    el('input', { type: 'range', min: 0, max: 1, step: 0.05, value: o.imageOpacity ?? 1, oninput: (e) => { o.imageOpacity = parseFloat(e.target.value); drawScene(); }, onchange: () => emit() }),
-  ]));
+  if (o.src) {
+    kids.push(el('div', { class: 'row' }, [
+      el('label', { text: 'Fit' }),
+      select(['cover', 'contain', 'stretch'], o.imageFit || 'cover', (v) => hexMutate('img fit', (m) => m.imageFit = v)),
+      toggleBtn('Clip to hexes', !!o.clipToHexes, () => hexMutate('img clip', (m) => m.clipToHexes = !m.clipToHexes)),
+    ]));
+    kids.push(el('div', { class: 'row split' }, [
+      el('label', { text: 'Opacity' }),
+      el('input', { type: 'range', min: 0, max: 1, step: 0.05, value: o.imageOpacity ?? 1, oninput: (e) => { o.imageOpacity = parseFloat(e.target.value); drawScene(); }, onchange: () => emit() }),
+    ]));
+  }
 
   kids.push(el('div', { class: 'btnrow' }, [
     el('button', { class: 'on', title: 'Link each hex to a text anchor named hex-<coord>, where one exists', onclick: () => autoLinkHexes(o) }, 'Auto-link by coordinate'),

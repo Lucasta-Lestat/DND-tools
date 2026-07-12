@@ -45,7 +45,11 @@ Switch with the buttons or keys **1 / 2 / 3**.
   headings — lets one story mix styles.
 - **Hex map** — a **hyperlinked hex grid** for a world/region map. Flat- or
   pointy-top hexes with coordinate labels (`0101`…), per-hex fill colour and
-  custom label, and an optional background map image. Each hex can **link to a
+  custom label, and an optional background map image that sits **cleanly under
+  the grid**: it is fitted to the grid's bounding box (not the whole frame) with
+  a **cover / contain / stretch** fit mode, an opacity slider, and an optional
+  **clip-to-hexes** mask that trims the image to the hexagons themselves. Each
+  hex can **link to a
   page, a named anchor, or a URL** — Ctrl/Cmd-click or double-click a hex to jump
   to its details in the text, and links export as clickable regions in the PDF —
   each hex tiled with inscribed, non-overlapping rectangles that hug its shape
@@ -194,7 +198,9 @@ Switch with the buttons or keys **1 / 2 / 3**.
 
 1. Pick the **Hex Map** tool (`G`) and drag out a grid (or click for a default).
    Set columns/rows, orientation, colours, and an optional background image in the
-   **Hex Map** panel.
+   **Hex Map** panel. A placed image is fitted to the grid — choose **cover /
+   contain / stretch**, tune opacity, and toggle **Clip to hexes** to mask it to
+   the hexagons.
 2. Anchor each region's write-up in the text: select its heading/frame and name
    the anchor `hex-0101`, `hex-0203`, … (Cross-References & Links panel).
 3. Click a hex, then either set its link directly (page / anchor / URL) or hit
