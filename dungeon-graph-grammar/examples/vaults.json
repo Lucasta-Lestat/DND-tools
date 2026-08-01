@@ -1,0 +1,16 @@
+{
+  "name": "vaults",
+  "outer_face": "rock",
+  "edge_length": {"min": 1.5, "max": 7.0},
+  "rooms": [
+    {"label": "vault", "color": "#c2ab84", "polygon": [[0, 0], [3, 0], [3, 3], [0, 3]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[3, 0], [6, 0], [6, 3], [3, 3]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[6, 0], [9, 0], [9, 3], [6, 3]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[0, 3], [3, 3], [3, 6], [0, 6]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[3, 3], [6, 3], [6, 6], [3, 6]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[6, 3], [9, 3], [9, 6], [6, 6]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[0, 6], [3, 6], [3, 9], [0, 9]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[3, 6], [6, 6], [6, 9], [3, 9]]},
+    {"label": "vault", "color": "#c2ab84", "polygon": [[6, 6], [9, 6], [9, 9], [6, 9]]}
+  ]
+}

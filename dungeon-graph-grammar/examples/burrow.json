@@ -1,0 +1,10 @@
+{
+  "name": "burrow",
+  "outer_face": "rock",
+  "edge_length": {"min": 1.5, "max": 7.0},
+  "rooms": [
+    {"label": "chamber", "color": "#c2ab84", "polygon": [[0, 0], [3, 0], [3, 3], [0, 3]]},
+    {"label": "chamber", "color": "#c2ab84", "polygon": [[3, 0], [6, 0], [6, 3], [3, 3]]},
+    {"label": "chamber", "color": "#c2ab84", "polygon": [[0, 3], [3, 3], [3, 6], [0, 6]]}
+  ]
+}

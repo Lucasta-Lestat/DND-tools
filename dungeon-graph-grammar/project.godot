@@ -1,0 +1,23 @@
+; Engine configuration file.
+; Godot 4.x
+
+config_version=5
+
+[application]
+
+config/name="Dungeon Graph Grammar"
+config/description="Example-based procedural dungeon generation using automatically derived graph grammars."
+run/main_scene="res://demo/main.tscn"
+config/features=PackedStringArray("4.3")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=800
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
