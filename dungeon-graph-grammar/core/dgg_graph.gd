@@ -35,6 +35,10 @@ var boundary_spokes: PackedInt32Array = PackedInt32Array()
 
 ## Optional geometry, filled in by [DGGLayout]. Empty on abstract angle graphs.
 var vertex_pos: PackedVector2Array = PackedVector2Array()
+## Vertices the author pinned. A frozen vertex is never matched by a rule, so it
+## is never cut out, and any wall running between two frozen vertices survives
+## every rewrite intact. Empty means nothing is pinned.
+var vertex_frozen: PackedByteArray = PackedByteArray()
 
 var _canonical_cache: String = ""
 
@@ -81,7 +85,31 @@ func duplicate_graph() -> DGGGraph:
 	g.boundary = boundary.duplicate_boundary()
 	g.boundary_spokes = boundary_spokes.duplicate()
 	g.vertex_pos = vertex_pos.duplicate()
+	g.vertex_frozen = vertex_frozen.duplicate()
 	return g
+
+
+func is_frozen(v: int) -> bool:
+	return v < vertex_frozen.size() and vertex_frozen[v] != 0
+
+
+func freeze_vertex(v: int) -> void:
+	if vertex_frozen.size() < vertex_count:
+		var grown := PackedByteArray()
+		grown.resize(vertex_count)
+		grown.fill(0)
+		for i in vertex_frozen.size():
+			grown[i] = vertex_frozen[i]
+		vertex_frozen = grown
+	vertex_frozen[v] = 1
+
+
+func frozen_count() -> int:
+	var n := 0
+	for f in vertex_frozen:
+		if f != 0:
+			n += 1
+	return n
 
 
 func spoke_count() -> int:
@@ -92,6 +120,16 @@ func edge_count() -> int:
 	var n := 0
 	for p in spoke_partner:
 		if p >= 0:
+			n += 1
+	return n / 2
+
+
+## Edges a creature could pass through: doorways and anything else the author
+## gave a non-wall kind.
+func passable_edge_count() -> int:
+	var n := 0
+	for s in spoke_count():
+		if spoke_partner[s] >= 0 and labels.edge_is_passable(DGGLabels.head_edge(spoke_head[s])):
 			n += 1
 	return n / 2
 
@@ -248,35 +286,55 @@ func _code_from(root: int) -> String:
 	return ";".join(parts)
 
 
-## Recovers the faces of a complete graph by walking the rotation system.
+## Walks every face of a complete graph, returning the spokes each face runs
+## along plus a spoke-to-face index.
 ##
 ## From a spoke, step to its partner and take the next spoke counter-clockwise.
 ## That keeps the face being traced on the walk's [b]right[/b], so a bounded room
 ## comes out clockwise (negative signed area) and the unbounded outside comes out
-## counter-clockwise (positive area). Renderers use the sign to tell rooms from the
-## surrounding rock; getting it backwards fills the whole footprint with one colour
-## and only looks right when every room shares a label.
+## counter-clockwise. Renderers use the sign to tell rooms from the surrounding
+## rock; getting it backwards fills the whole footprint with one colour and only
+## looks right when every room shares a label.
 ##
-## Returns an array of [code]{label, vertices}[/code].
-func trace_faces() -> Array:
-	var out: Array = []
-	var visited := {}
+## Returns [code]{cycles, face_of_spoke}[/code]. Everything that needs faces goes
+## through here — the walk is subtle enough that a second copy of it is a bug
+## waiting to happen.
+func face_cycles() -> Dictionary:
+	var cycles: Array = []
+	var face_of_spoke := PackedInt32Array()
+	face_of_spoke.resize(spoke_count())
+	face_of_spoke.fill(-1)
 	for start in spoke_count():
-		if visited.has(start) or spoke_partner[start] < 0:
+		if face_of_spoke[start] >= 0 or spoke_partner[start] < 0:
 			continue
+		var index := cycles.size()
 		var cycle := PackedInt32Array()
 		var d := start
-		while not visited.has(d):
-			visited[d] = true
-			cycle.append(spoke_vertex[d])
+		while face_of_spoke[d] < 0:
+			face_of_spoke[d] = index
+			cycle.append(d)
 			var p: int = spoke_partner[d]
 			if p < 0:
 				break
 			var ring: PackedInt32Array = vertex_spokes[spoke_vertex[p]]
 			d = ring[(ring.find(p) + 1) % ring.size()]
+		cycles.append(cycle)
+	return {"cycles": cycles, "face_of_spoke": face_of_spoke}
+
+
+## The faces as [code]{label, vertices}[/code], for renderers.
+func trace_faces() -> Array:
+	var out: Array = []
+	for cycle in face_cycles()["cycles"]:
+		var spokes: PackedInt32Array = cycle
+		if spokes.is_empty():
+			continue
+		var verts := PackedInt32Array()
+		for d in spokes:
+			verts.append(spoke_vertex[d])
 		out.append({
-			"label": labels.head_right_face(spoke_head[start]),
-			"vertices": cycle,
+			"label": labels.head_right_face(spoke_head[spokes[0]]),
+			"vertices": verts,
 		})
 	return out
 
@@ -301,27 +359,6 @@ func euler_characteristic() -> int:
 	return vertex_count - edge_count() + trace_faces().size()
 
 
-## The faces of a complete graph, as the spokes each face walk traverses.
-func _face_spokes() -> Array:
-	var out: Array = []
-	var visited := {}
-	for start in spoke_count():
-		if visited.has(start) or spoke_partner[start] < 0:
-			continue
-		var cycle := PackedInt32Array()
-		var d := start
-		while not visited.has(d):
-			visited[d] = true
-			cycle.append(d)
-			var p: int = spoke_partner[d]
-			if p < 0:
-				break
-			var ring: PackedInt32Array = vertex_spokes[spoke_vertex[p]]
-			d = ring[(ring.find(p) + 1) % ring.size()]
-		out.append(cycle)
-	return out
-
-
 ## Whether every face could be drawn with the angles its labels demand.
 ##
 ## [method euler_characteristic] only says the rotation system embeds on a sphere.
@@ -340,7 +377,7 @@ func _face_spokes() -> Array:
 ## Both are cheap and certain here; left to [DGGLayout] they cost a whole rejection
 ## sampling budget and come back as a misleading "walls cross" or "edge length 0.00".
 func faces_are_realisable() -> bool:
-	for cycle in _face_spokes():
+	for cycle in face_cycles()["cycles"]:
 		var k: int = (cycle as PackedInt32Array).size()
 		if k < 2:
 			return false  # a face bounded by one spoke is a self-loop

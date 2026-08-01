@@ -9,8 +9,13 @@ extends RefCounted
 ## neighbourhood holds a single edge, vertex or face, so two edges are
 ## interchangeable exactly when their labels match.
 ##
-## An edge label is the triple [code]ã = (l, r, θ)[/code] — the face on its left,
-## the face on its right, and its tangent angle. Angles are stored in
+## An edge label is the tuple [code]ã = (l, r, θ, kind)[/code] — the face on its
+## left, the face on its right, its tangent angle, and what the wall is made of.
+## [i]kind[/i] is how doors enter the model: a doorway is still a wall segment, so
+## the faces stay well defined, but it carries a different kind and is therefore a
+## different label. Local similarity then preserves door topology for free — the
+## matcher will not swap a door for a solid wall any more than it would swap a
+## horizontal wall for a vertical one. Angles are stored in
 ## [code][0°, 180°)[/code]; an edge and its reverse are the same edge, so the
 ## direction that would exceed 180° is folded back with [code]l[/code] and
 ## [code]r[/code] swapped.
@@ -27,9 +32,15 @@ extends RefCounted
 var angle_epsilon: float = 0.5
 
 var face_names: PackedStringArray = PackedStringArray()
+## Wall kinds. Index 0 is always [code]"wall"[/code]; doors and anything else an
+## author invents are interned after it.
+var kind_names: PackedStringArray = PackedStringArray(["wall"])
 var _edge_left: PackedInt32Array = PackedInt32Array()
 var _edge_right: PackedInt32Array = PackedInt32Array()
 var _edge_angle: PackedFloat32Array = PackedFloat32Array()
+var _edge_kind: PackedInt32Array = PackedInt32Array()
+
+const KIND_WALL := 0
 
 
 func face_id(name: String) -> int:
@@ -60,10 +71,32 @@ func edge_angle(id: int) -> float:
 	return _edge_angle[id]
 
 
+func edge_kind(id: int) -> int:
+	return _edge_kind[id]
+
+
+func kind_id(name: String) -> int:
+	var idx := kind_names.find(name)
+	if idx >= 0:
+		return idx
+	kind_names.append(name)
+	return kind_names.size() - 1
+
+
+func kind_name(id: int) -> String:
+	return kind_names[id] if id >= 0 and id < kind_names.size() else "?"
+
+
+## True when this label is anything other than a solid wall, i.e. something a
+## creature could pass through. Room adjacency is built out of these.
+func edge_is_passable(id: int) -> bool:
+	return _edge_kind[id] != KIND_WALL
+
+
 ## Interns the edge label for a segment travelling in [param direction_deg] with
 ## [param left] on its left. Returns the edge label id; the caller pairs it with a
 ## sign to get a half-edge.
-func edge_id(left: int, right: int, direction_deg: float) -> int:
+func edge_id(left: int, right: int, direction_deg: float, kind: int = KIND_WALL) -> int:
 	var theta := normalize_180(direction_deg)
 	var l := left
 	var r := right
@@ -77,12 +110,13 @@ func edge_id(left: int, right: int, direction_deg: float) -> int:
 		l = right
 		r = left
 	for i in _edge_angle.size():
-		if _edge_left[i] == l and _edge_right[i] == r \
+		if _edge_left[i] == l and _edge_right[i] == r and _edge_kind[i] == kind \
 				and absf(_edge_angle[i] - theta) <= angle_epsilon:
 			return i
 	_edge_left.append(l)
 	_edge_right.append(r)
 	_edge_angle.append(theta)
+	_edge_kind.append(kind)
 	return _edge_angle.size() - 1
 
 
@@ -120,8 +154,9 @@ func head_right_face(head: int) -> int:
 
 func head_name(head: int) -> String:
 	var e := head >> 1
-	return "%s|%s@%.0f%s" % [
+	return "%s|%s@%.0f%s%s" % [
 		face_name(_edge_left[e]), face_name(_edge_right[e]), _edge_angle[e],
+		"" if _edge_kind[e] == KIND_WALL else " " + kind_name(_edge_kind[e]),
 		"+" if (head & 1) == 1 else "-",
 	]
 
@@ -129,12 +164,13 @@ func head_name(head: int) -> String:
 ## Interns the half-edge for a spoke leaving a vertex in [param direction_deg],
 ## with [param left_out] / [param right_out] naming the faces either side of that
 ## outward ray.
-func spoke_head(left_out: int, right_out: int, direction_deg: float) -> int:
+func spoke_head(left_out: int, right_out: int, direction_deg: float,
+		kind: int = KIND_WALL) -> int:
 	var dir := normalize_180(direction_deg)
 	if dir < 0.0 and dir > -angle_epsilon:
 		dir = 0.0  # just shy of due-east is due-east, and so a positive half-edge
 	var positive := dir >= 0.0
-	var edge := edge_id(left_out, right_out, dir)
+	var edge := edge_id(left_out, right_out, dir, kind)
 	return head_id(edge, positive)
 
 

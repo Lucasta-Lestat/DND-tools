@@ -30,6 +30,8 @@ var seam: Array[Vector2i] = []
 ## Where this rule came from, for the inspector.
 var note: String = ""
 
+var _delta_cache: Dictionary = {}
+
 
 static func make(p_left: DGGGraph, p_right: Array[DGGGraph], p_seam: Array[Vector2i]) -> DGGRule:
 	var r := DGGRule.new()
@@ -50,6 +52,45 @@ static func starter(complete_graph: DGGGraph) -> DGGRule:
 
 func is_starter() -> bool:
 	return right.is_empty()
+
+
+## What applying this rule does to the counts a goal can name — fixed, and known
+## before any dungeon exists.
+##
+## A rule swaps one side for the other and reconnects through the same sockets, so
+## the socket edges cancel and only the sides' own vertices and internal edges
+## move the totals. Room count follows from Euler: the bounded-face count of a
+## connected plane graph is [code]E - V + 1[/code], so the change in rooms is just
+## the change in edges minus the change in vertices. (That counts sealed rock
+## pockets as rooms, so it is a good steer rather than an exact promise.)
+##
+## [param backwards] applies [code]R → L[/code], which is the growing direction.
+func delta(backwards: bool) -> Dictionary:
+	var key := 1 if backwards else 0
+	if _delta_cache.has(key):
+		return _delta_cache[key]
+	var right_vertices := 0
+	var right_edges := 0
+	var right_doors := 0
+	for piece in right:
+		right_vertices += piece.vertex_count
+		right_edges += piece.edge_count()
+		right_doors += piece.passable_edge_count()
+	var d_vertices := right_vertices - left.vertex_count
+	var d_edges := right_edges - left.edge_count()
+	var d_doors := right_doors - left.passable_edge_count()
+	if backwards:
+		d_vertices = -d_vertices
+		d_edges = -d_edges
+		d_doors = -d_doors
+	var out := {
+		"vertices": d_vertices,
+		"edges": d_edges,
+		"doors": d_doors,
+		"rooms": d_edges - d_vertices,
+	}
+	_delta_cache[key] = out
+	return out
 
 
 ## Half-edges on the boundary of either side. Both sides agree by construction.

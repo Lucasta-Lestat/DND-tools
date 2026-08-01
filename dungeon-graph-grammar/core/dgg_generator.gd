@@ -38,11 +38,24 @@ var max_placements: int = 40
 ## a few candidates before conceding the iteration keeps the walk moving.
 var proposals_per_iteration: int = 8
 ## Rough vertex count to steer towards. Zero leaves the walk unbiased, which
-## wanders around whatever size the starting shape happened to be.
+## wanders around whatever size the starting shape happened to be. Kept as a
+## convenience; it feeds [member goals].
 var target_vertices: int = 0
-## How readily the walk accepts a step away from [member target_vertices]. Larger
-## values wander more.
+## What the author wants beyond local similarity. See [DGGGoals].
+var goals: DGGGoals = DGGGoals.new()
+## The face label that counts as "outside" when reading room structure.
+## [DGGExample] interns it first, so 0 is right unless something else built the
+## label set.
+var outer_face: int = 0
+## How readily the walk accepts a step away from the goal at the start of a run.
+## Larger values wander more.
 var temperature: float = 2.0
+## Fraction of the starting temperature the walk cools to by the last iteration.
+## A single fixed temperature explores well but never settles: it keeps accepting
+## steps away from the target right up to the end, so the result is wherever the
+## walk happened to stop. Cooling lets it roam early and commit late. 1.0 disables
+## the schedule.
+var cooling: float = 0.05
 ## How sharply rule selection favours rules that have worked before. 1.0 disables
 ## the bias and draws uniformly.
 var learning_rate: float = 1.6
@@ -54,6 +67,8 @@ var unmatched: int = 0
 ## Proposals whose splice produced a rotation system that does not embed in the
 ## plane, so no drawing of it could exist.
 var nonplanar: int = 0
+## Drawable proposals turned down because they broke a hard requirement.
+var disallowed: int = 0
 ## Proposals whose splice left the graph in more than one piece. Every rule here
 ## splits, so this is the normal outcome when the host does not tie the pieces
 ## back together — it is not a planarity failure and used to be counted as one.
@@ -80,6 +95,12 @@ func configure_lengths(min_length: float, max_length: float) -> void:
 	layout.max_edge_length = max_length
 
 
+## Takes the drawing limits and the outer-face id straight from the example.
+func configure(example: DGGExample) -> void:
+	configure_lengths(example.min_edge_length, example.max_edge_length)
+	outer_face = example.labels.face_id(example.outer_face)
+
+
 ## Runs Algorithm 3 for [param iterations] proposals and returns the drawing.
 func generate(iterations: int, start: DGGGraph = null) -> DGGGraph:
 	accepted = 0
@@ -96,58 +117,100 @@ func generate(iterations: int, start: DGGGraph = null) -> DGGGraph:
 	if not layout.realise(current):
 		return null
 
+	if target_vertices > 0:
+		goals.target_vertices = target_vertices
 	var applicable := grammar.rules.filter(func(r): return not r.is_starter())
 	if applicable.is_empty():
 		return current
+
+	# One entry per rule per direction, because a rule that grows the dungeon and
+	# the same rule run backwards are different moves and deserve separate
+	# treatment.
+	var moves: Array = []
+	for rule in applicable:
+		for backwards in [false, true]:
+			moves.append({"rule": rule, "backwards": backwards,
+					"delta": (rule as DGGRule).delta(backwards)})
+
 	# A deep hierarchy yields hundreds of rules, and on any given dungeon most of
 	# them match nothing. Drawing uniformly spends nearly every proposal on a rule
-	# that cannot apply here. Instead, let the walk learn: rules that produce a
-	# usable rewrite get drawn more often, rules that keep failing fade out. The
-	# weights are per-run, so a rule that stops applying as the shape changes
+	# that cannot apply here. Instead, let the walk learn: moves that produce a
+	# usable rewrite get drawn more often, moves that keep failing fade out. The
+	# weights are per-run, so a move that stops applying as the shape changes
 	# decays back down on its own.
 	var weights := PackedFloat32Array()
-	weights.resize(applicable.size())
+	weights.resize(moves.size())
 	weights.fill(1.0)
+	var affinity := PackedFloat32Array()
+	affinity.resize(moves.size())
+	affinity.fill(1.0)
 
+	var topology := _topology(current)
 	for i in iterations:
+		# Each rule's effect on size, rooms and doorways is fixed and known, so
+		# favour the ones pointing at the goal rather than proposing blindly and
+		# discarding what does not help.
+		if goals.proposal_bias > 0.0 and goals.is_active():
+			for m in moves.size():
+				affinity[m] = goals.rule_affinity(moves[m]["delta"], current, topology)
 		var proposal: DGGGraph = null
+		var proposal_topology: DGGTopology = null
 		var chosen: DGGRule = null
 		var chosen_backwards := false
 		for tries in proposals_per_iteration:
-			var pick := _weighted_pick(weights)
-			var rule: DGGRule = applicable[pick]
-			var backwards := rng.randi() % 2 == 0
-			var candidate := _apply(current, rule, backwards)
+			var pick := _weighted_pick(weights, affinity)
+			var move: Dictionary = moves[pick]
+			var candidate := _apply(current, move["rule"], move["backwards"])
 			if candidate == null:
 				weights[pick] = maxf(weights[pick] / learning_rate, 0.02)
 				continue
 			weights[pick] = minf(weights[pick] * learning_rate, 32.0)
+			# Check the hard requirements before drawing. Reading the room graph
+			# costs a fraction of a layout solve, and a candidate that breaks a
+			# requirement is going to be thrown away regardless.
+			var candidate_topology := _topology(candidate)
+			if not goals.permits(candidate_topology):
+				disallowed += 1
+				continue
 			if not layout.realise(candidate):
 				undrawable += 1
 				var why := layout.last_failure
 				failure_reasons[why] = int(failure_reasons.get(why, 0)) + 1
 				continue
 			proposal = candidate
-			chosen = rule
-			chosen_backwards = backwards
+			proposal_topology = candidate_topology
+			chosen = move["rule"]
+			chosen_backwards = move["backwards"]
 			break
-		if proposal == null or not _accept(current, proposal):
+		var temp: float = temperature
+		if cooling < 1.0 and iterations > 1:
+			temp *= pow(cooling, float(i) / float(iterations - 1))
+		if proposal == null or not _accept(current, topology, proposal, proposal_topology, temp):
 			rejected += 1
 			continue
 		current = proposal
+		topology = proposal_topology
 		accepted += 1
 		step_applied.emit(i, chosen, chosen_backwards)
 	return current
 
 
-## Draws an index in proportion to its weight.
-func _weighted_pick(weights: PackedFloat32Array) -> int:
+## The room-adjacency view, computed only when a goal actually asks for it — it is
+## the most expensive measurement in the loop.
+func _topology(graph: DGGGraph) -> DGGTopology:
+	if graph == null or not goals.needs_topology():
+		return null
+	return DGGTopology.analyse(graph, outer_face, false)
+
+
+## Draws an index in proportion to weight times goal affinity.
+func _weighted_pick(weights: PackedFloat32Array, affinity: PackedFloat32Array) -> int:
 	var total := 0.0
-	for w in weights:
-		total += w
+	for i in weights.size():
+		total += weights[i] * affinity[i]
 	var r := rng.randf() * total
 	for i in weights.size():
-		r -= weights[i]
+		r -= weights[i] * affinity[i]
 		if r <= 0.0:
 			return i
 	return weights.size() - 1
@@ -159,14 +222,15 @@ func _weighted_pick(weights: PackedFloat32Array) -> int:
 ## one, steps towards the requested size are always taken and steps away are taken
 ## with a falling probability. The cost function is arbitrary in the paper — size
 ## is simply the knob a dungeon needs most.
-func _accept(current: DGGGraph, proposal: DGGGraph) -> bool:
-	if target_vertices <= 0:
+func _accept(current: DGGGraph, current_topology: DGGTopology,
+		proposal: DGGGraph, proposal_topology: DGGTopology, temp: float) -> bool:
+	if not goals.is_active():
 		return true
-	var before := absi(current.vertex_count - target_vertices)
-	var after := absi(proposal.vertex_count - target_vertices)
+	var before := goals.cost(current, current_topology)
+	var after := goals.cost(proposal, proposal_topology)
 	if after <= before:
 		return true
-	return rng.randf() < exp(-float(after - before) / maxf(temperature, 0.01))
+	return rng.randf() < exp(-(after - before) / maxf(temp, 0.01))
 
 
 ## The starting shape: whichever complete graph a starter rule offers, preferring
@@ -312,6 +376,7 @@ func _splice(graph: DGGGraph, removed: Dictionary, inserted: Array[DGGGraph],
 		vmap[v] = out.vertex_count
 		out.vertex_count += 1
 		out.vertex_pos.append(graph.vertex_pos[v])
+		out.vertex_frozen.append(1 if graph.is_frozen(v) else 0)
 		var ring := PackedInt32Array()
 		for s in graph.vertex_spokes[v]:
 			smap[s] = out.spoke_vertex.size()
@@ -335,6 +400,7 @@ func _splice(graph: DGGGraph, removed: Dictionary, inserted: Array[DGGGraph],
 		var v_off := out.vertex_count
 		for v in piece.vertex_count:
 			out.vertex_pos.append(DGGLayout.NO_POSITION)
+			out.vertex_frozen.append(0)
 		out.vertex_count += piece.vertex_count
 		var base := out.spoke_vertex.size()
 		for s in piece.spoke_count():
@@ -394,7 +460,14 @@ static func _inserted_spoke(inserted: Array[DGGGraph], bases: Array[int], packed
 ## to be exhaustive.
 func _all_placements(graph: DGGGraph, patterns: Array[DGGGraph]) -> Array:
 	var out: Array = []
-	_collect(graph, patterns, 0, {}, [], out)
+	# Anchored vertices go in as already-used. A rule can never match them, so it
+	# can never cut them out, and the author's own rooms come through every rewrite
+	# untouched while everything around them reshapes.
+	var reserved := {}
+	for v in graph.vertex_count:
+		if graph.is_frozen(v):
+			reserved[v] = true
+	_collect(graph, patterns, 0, reserved, [], out)
 	return out
 
 

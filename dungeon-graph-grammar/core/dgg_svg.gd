@@ -53,6 +53,15 @@ static func render(graph: DGGGraph, example: DGGExample = null) -> String:
 		seen[p] = true
 		var a := _to_svg(graph.vertex_pos[graph.spoke_vertex[s]], lo)
 		var b := _to_svg(graph.vertex_pos[graph.spoke_vertex[p]], lo)
+		var edge := DGGLabels.head_edge(graph.spoke_head[s])
+		if graph.labels.edge_is_passable(edge):
+			# A doorway is drawn as a gap with a threshold, so a reader can see at a
+			# glance which way a player could walk.
+			body.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+					% [a.x, a.y, b.x, b.y]
+					+ 'stroke="%s" stroke-width="2" stroke-dasharray="3 3"/>'
+					% _kind_color(graph, example, edge))
+			continue
 		body.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
 				% [a.x, a.y, b.x, b.y]
 				+ 'stroke="#0d0e11" stroke-width="3" stroke-linecap="round"/>')
@@ -78,6 +87,13 @@ static func _signed_area(pts: PackedVector2Array) -> float:
 		var q := pts[(i + 1) % pts.size()]
 		a += p.x * q.y - q.x * p.y
 	return a * 0.5
+
+
+static func _kind_color(graph: DGGGraph, example: DGGExample, edge: int) -> String:
+	var name := graph.labels.kind_name(graph.labels.edge_kind(edge))
+	if example and example.kind_colors.has(name):
+		return str(example.kind_colors[name])
+	return "#e8d9a0"
 
 
 static func _color(graph: DGGGraph, example: DGGExample, face: int) -> String:

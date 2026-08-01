@@ -16,6 +16,9 @@ func _initialize() -> void:
 	var generations := 5
 	var target := 0
 	var hierarchy := 0
+	var rooms := 0
+	var loops := -1
+	var connected := false
 	var positional: Array[String] = []
 	var i := 0
 	while i < args.size():
@@ -26,6 +29,9 @@ func _initialize() -> void:
 			"--generations": generations = int(args[i + 1]); i += 1
 			"--target": target = int(args[i + 1]); i += 1
 			"--hierarchy": hierarchy = int(args[i + 1]); i += 1
+			"--rooms": rooms = int(args[i + 1]); i += 1
+			"--loops": loops = int(args[i + 1]); i += 1
+			"--connected": connected = true
 			_: positional.append(a)
 		i += 1
 	if positional.size() > 0:
@@ -50,8 +56,14 @@ func _initialize() -> void:
 	print("%s\n  grammar in %d ms" % [grammar.summary(), Time.get_ticks_msec() - t0])
 
 	var generator := DGGGenerator.new(grammar, seed)
-	generator.configure_lengths(example.min_edge_length, example.max_edge_length)
+	generator.configure(example)
 	generator.target_vertices = target
+	generator.goals.target_rooms = rooms
+	generator.goals.target_loops = loops
+	generator.goals.require_single_region = connected
+	generator.goals.require_all_reachable = connected
+	if generator.goals.is_active():
+		print("  %s" % generator.goals.summary())
 	t0 = Time.get_ticks_msec()
 	var dungeon := generator.generate(iterations)
 	if dungeon == null:
@@ -62,6 +74,8 @@ func _initialize() -> void:
 		dungeon.vertex_count, dungeon.edge_count(),
 		generator.accepted, generator.rejected, Time.get_ticks_msec() - t0,
 	])
+	print("  %s" % DGGTopology.analyse(dungeon,
+			example.labels.face_id(example.outer_face)).summary().replace("\n", "\n  "))
 	print("  rejected: %d unplaceable, %d disconnected, %d non-planar, %d unrealisable, %d undrawable"
 			% [generator.unmatched, generator.disconnected, generator.nonplanar,
 				generator.unrealisable, generator.undrawable])

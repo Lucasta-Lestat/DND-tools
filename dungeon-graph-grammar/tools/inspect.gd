@@ -24,6 +24,8 @@ func _initialize() -> void:
 			i, example.primitive_counts[i], str(example.primitives[i].boundary),
 		])
 
+	print("  %s" % DGGTopology.analyse(example.graph,
+			example.labels.face_id(example.outer_face)).summary().replace("\n", "\n  "))
 	print("\n%s" % DGGFeasibility.analyse(example).summary())
 
 	var grammar := DGGGrammar.from_example(example)

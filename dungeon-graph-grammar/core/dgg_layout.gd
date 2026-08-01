@@ -353,6 +353,11 @@ func _widen(graph: DGGGraph, free: Dictionary) -> bool:
 			var w: int = graph.spoke_vertex[p]
 			if not free.has(w) and not ring.has(w):
 				ring.append(w)
+	# An anchored vertex must not move either, or the author's room would survive
+	# the graph rewrite only to be dragged out of shape by the solver.
+	for i in range(ring.size() - 1, -1, -1):
+		if graph.is_frozen(ring[i]):
+			ring.remove_at(i)
 	if ring.is_empty():
 		return false
 	# Keep one vertex nailed down. With everything loose the system only fixes the

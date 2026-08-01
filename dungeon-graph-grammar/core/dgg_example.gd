@@ -4,7 +4,8 @@ extends RefCounted
 
 ## An example dungeon: the hand-authored floorplan a grammar is learned from.
 ##
-## Authors give rooms as polygons. This class turns them into the labelled plane
+## Authors give rooms as polygons, plus optional doorways naming a stretch of wall
+## a creature can pass through. This class turns them into the labelled plane
 ## graph the algorithm works on, then cuts that graph into primitives (§4.1) —
 ## one per vertex, every incident edge severed. Those primitives are the only
 ## thing the grammar ever sees; everything generated afterwards is some
@@ -21,6 +22,11 @@ var primitives: Array[DGGGraph] = []
 ## How many vertices of the example each distinct primitive accounts for.
 var primitive_counts: PackedInt32Array = PackedInt32Array()
 var face_colors: Dictionary = {}
+## Colour per wall kind, for renderers. Solid walls fall back to the default.
+var kind_colors: Dictionary = {}
+## Face labels the author marked as anchors. Their corners are pinned, so those
+## rooms survive generation unchanged while the rest of the dungeon reshapes.
+var anchored_faces: Dictionary = {}
 var outer_face: String = "void"
 var min_edge_length: float = 1.0
 var max_edge_length: float = 8.0
@@ -31,6 +37,10 @@ var _snap: float = SNAP_DEFAULT
 var _points: PackedVector2Array = PackedVector2Array()
 ## Directed wall occurrences: key "u>w" → face id on the left of u→w.
 var _left_of: Dictionary = {}
+## Undirected wall pairs that are not solid: key "u:w" (u < w) → kind id.
+var _kind_of: Dictionary = {}
+## Doorways as authored, resolved to vertex pairs once the walls have been split.
+var _requested_doors: Array = []
 
 
 static func from_file(path: String) -> DGGExample:
@@ -64,8 +74,15 @@ static func from_dict(d: Dictionary) -> DGGExample:
 		var label: String = room.get("label", "room")
 		if room.has("color"):
 			ex.face_colors[label] = room["color"]
+		if bool(room.get("anchor", false)):
+			ex.anchored_faces[label] = true
 		ex._add_room(label, room.get("polygon", []))
+	# Interning the doorway endpoints before the split means the wall-splitter
+	# carves each doorway out as its own segment for free.
+	for door in d.get("doors", []):
+		ex._add_door(door)
 	ex._split_edges_at_touching_vertices()
+	ex._resolve_doors()
 	ex._build_graph()
 	ex._build_primitives()
 	return ex
@@ -119,6 +136,46 @@ func _add_room(label: String, polygon: Array) -> void:
 		_left_of[key] = face
 
 
+## Records a doorway: a stretch of an existing wall that is passable.
+##
+## The endpoints are interned as vertices now so that
+## [method _split_edges_at_touching_vertices] cuts the wall at them; which wall
+## they landed on is worked out afterwards, once the splitting has settled.
+func _add_door(door: Dictionary) -> void:
+	if not door.has("from") or not door.has("to"):
+		warnings.append("a doorway is missing 'from' or 'to' and was skipped")
+		return
+	var a := Vector2(float(door["from"][0]), float(door["from"][1]))
+	var b := Vector2(float(door["to"][0]), float(door["to"][1]))
+	if a.distance_to(b) <= _snap:
+		warnings.append("a doorway at %s has no length and was skipped" % str(a))
+		return
+	var kind: String = door.get("kind", "door")
+	if door.has("color"):
+		kind_colors[kind] = door["color"]
+	_requested_doors.append({
+		"u": _intern_point(a), "w": _intern_point(b),
+		"kind": labels.kind_id(kind), "at": a,
+	})
+
+
+## Marks each requested doorway on the wall it sits in, now that walls have been
+## split at its endpoints.
+func _resolve_doors() -> void:
+	for door in _requested_doors:
+		var u: int = door["u"]
+		var w: int = door["w"]
+		if not _left_of.has("%d>%d" % [u, w]) and not _left_of.has("%d>%d" % [w, u]):
+			warnings.append("the doorway at %s does not lie along any wall"
+					% str(door["at"]))
+			continue
+		_kind_of[_wall_key(u, w)] = door["kind"]
+
+
+static func _wall_key(u: int, w: int) -> String:
+	return "%d:%d" % [mini(u, w), maxi(u, w)]
+
+
 static func _signed_area(pts: Array[Vector2]) -> float:
 	var a := 0.0
 	for i in pts.size():
@@ -159,6 +216,11 @@ func _split_edges_at_touching_vertices() -> void:
 				_left_of.erase(key)
 				_left_of["%d>%d" % [u, v]] = face
 				_left_of["%d>%d" % [v, w]] = face
+				if _kind_of.has(_wall_key(u, w)):
+					var kind: int = _kind_of[_wall_key(u, w)]
+					_kind_of.erase(_wall_key(u, w))
+					_kind_of[_wall_key(u, v)] = kind
+					_kind_of[_wall_key(v, w)] = kind
 				changed = true
 				break
 			if changed:
@@ -192,7 +254,8 @@ func _build_graph() -> void:
 		var dir := rad_to_deg((_points[d.y] - _points[d.x]).angle())
 		var left: int = _left_of["%d>%d" % [d.x, d.y]]
 		var right: int = _left_of["%d>%d" % [d.y, d.x]]
-		var head := labels.spoke_head(left, right, dir)
+		var kind: int = _kind_of.get(_wall_key(d.x, d.y), DGGLabels.KIND_WALL)
+		var head := labels.spoke_head(left, right, dir, kind)
 		var s := graph.spoke_vertex.size()
 		graph.spoke_vertex.append(d.x)
 		graph.spoke_head.append(head)
@@ -215,6 +278,22 @@ func _build_graph() -> void:
 			packed.append(entry[1])
 		graph.vertex_spokes.append(packed)
 	_check_face_consistency()
+	_apply_anchors()
+
+
+## Pins every corner touching an anchored room, including corners the wall-splitter
+## introduced along its walls.
+func _apply_anchors() -> void:
+	if anchored_faces.is_empty():
+		return
+	for v in graph.vertex_count:
+		for s in graph.vertex_spokes[v]:
+			var head: int = graph.spoke_head[s]
+			var left := labels.face_name(labels.head_left_face(head))
+			var right := labels.face_name(labels.head_right_face(head))
+			if anchored_faces.has(left) or anchored_faces.has(right):
+				graph.freeze_vertex(v)
+				break
 
 
 ## Walking counter-clockwise round a vertex, the face to one spoke's left must be
@@ -261,9 +340,20 @@ func _build_primitives() -> void:
 			primitive_counts.append(1)
 
 
+func door_count() -> int:
+	var n := 0
+	for s in graph.spoke_count():
+		if graph.spoke_partner[s] >= 0 \
+				and labels.edge_is_passable(DGGLabels.head_edge(graph.spoke_head[s])):
+			n += 1
+	return n / 2
+
+
 func summary() -> String:
-	var s := "%s: %d vertices, %d edges, %d faces, %d distinct primitives" % [
-		name, graph.vertex_count, graph.edge_count(),
+	var s := "%s: %d vertices%s, %d edges (%d passable), %d faces, %d distinct primitives" % [
+		name, graph.vertex_count,
+		"" if graph.frozen_count() == 0 else " (%d anchored)" % graph.frozen_count(),
+		graph.edge_count(), door_count(),
 		labels.face_names.size(), primitives.size(),
 	]
 	for w in warnings:

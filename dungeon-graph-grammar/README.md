@@ -106,9 +106,9 @@ godot --headless --path . --script res://tools/label_conservation.gd
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`generate.gd` takes `--seed`, `--iterations`, `--generations`, `--target` (a
-vertex-count goal, steered by the Metropolis filter of §6.3) and `--hierarchy`
-(the cap on stored graphs during rule discovery).
+`generate.gd` takes `--seed`, `--iterations`, `--generations`, `--hierarchy` (the
+cap on stored graphs during rule discovery) and the goal flags `--target`
+(vertices), `--rooms`, `--loops` and `--connected`.
 
 ## Authoring an example
 
@@ -138,6 +138,42 @@ Rooms are polygons. Anything a polygon does not border is the outer face.
 - `angle_epsilon` (default 0.5°) sets how close two walls must be in angle to
   count as the same label. Widen it to make a hand-drawn example generalise more.
 
+### Doorways
+
+Rooms are sealed until you cut a way through. A doorway is a stretch of an
+existing wall, given by its two endpoints; the loader splits the wall at them for
+you.
+
+```json
+"doors": [
+  {"from": [2, 0.6], "to": [2, 1.4], "color": "#e8d9a0"}
+]
+```
+
+A doorway is still a wall segment — the faces stay well defined — but it carries a
+different *kind*, and kind is part of the label. That is the whole trick: because
+labels **are** the similarity relation, the matcher will no more swap a doorway
+for a solid wall than it would swap a horizontal wall for a vertical one. Door
+topology is preserved by the same mechanism that preserves everything else, with
+no special-casing anywhere in the grammar.
+
+Doorways are also what make the room-adjacency graph exist, and that is where
+almost every question a designer actually asks lives. See below.
+
+### Anchored rooms
+
+Mark a room `"anchor": true` and its corners are pinned. A pinned corner is never
+matched by a rule, so it is never cut out, and any wall running between two
+pinned corners survives every rewrite. The layout stage will not move it either.
+
+```json
+{"label": "vault", "anchor": true, "polygon": [[4,0],[6,0],[6,2],[4,2]]}
+```
+
+This is the "I drew the boss chamber by hand, generate the rest" case. In
+`examples/sanctum.json` the vault comes out byte-identical across every seed
+while the dungeon around it grows from 14 vertices to 40.
+
 ## Constraining the output
 
 Local similarity is a promise about every junction and nothing else, so global
@@ -146,16 +182,74 @@ with 19 holes; the input has 2. That is not a bug — every corner is still a
 corner from the example — but "locally similar" and "what I wanted" are different
 things, and the gap is where a user needs control.
 
-The useful thing to know first is that **most of the obvious knobs are not free
-variables.** In a finished dungeon every half-edge is glued to its complement, so
-for each wall label the two sides must appear equally often. That is a linear
-system on how many times each primitive is used, and every quantity a constraint
-could name — vertex count, room count, each label's count — is a linear function
-of that usage vector. The achievable space is therefore a cone, usually far
-smaller than the primitive count suggests, and it can be solved for in
-milliseconds before generating anything.
+### Say what you want
 
-`DGGFeasibility` does that and reports it. For `cells`:
+`DGGGoals` carries the targets. Three mechanisms, and picking the right one
+matters more than the numbers:
+
+| mechanism | what it is for | example |
+|---|---|---|
+| **soft target** | anything you want *roughly* | `target_rooms`, `target_loops` |
+| **hard requirement** | things that make the output useless if violated | `require_all_reachable` |
+| **proposal bias** | making the walk propose useful moves in the first place | automatic |
+
+The third is the one worth knowing about. Every rule has a **fixed** effect on
+vertex, edge, doorway and room counts, known before the run starts — a rule cannot
+sometimes add a room and sometimes remove one. Room count follows from Euler:
+the bounded-face count of a connected plane graph is `E − V + 1`, so a rule's
+effect on it is just its effect on edges minus its effect on vertices. So instead
+of proposing blindly and discarding whatever does not help, the generator favours
+rules whose effect points at the target. That improves the *proposals* rather
+than the rejections, which is worth far more.
+
+Measured on `lair`, asking for a room count and getting it:
+
+| asked for | got |
+|---|---|
+| 3 rooms | 5 |
+| 6 rooms | 6 |
+| 10 rooms | 10 |
+| 16 rooms | 15 |
+
+And steering the room graph's shape directly:
+
+```
+--loops 0 --connected   →  3 rooms, 2 doorways — a corridor, 0 loops, 2 dead ends
+--loops 4 --connected   →  3 rooms, 6 doorways — 4 interlocking loops
+```
+
+This is the donut-versus-spaghetti knob, and it needs the *dual*. Cycle rank on
+the wall graph (`E − V + 1`) looks like a loopiness measure but equals the
+bounded-face count exactly — it is the room count in disguise, and constraining it
+just constrains size. The number that matters is the cycle rank of the
+room-adjacency graph, which only exists once there are doorways.
+`DGGTopology` computes it along with regions, reachability, depth and dead ends.
+
+### Two warnings, both measured
+
+**Hard requirements multiply, and can deadlock.** Each one cuts the acceptance
+rate. Worse, if two happen to have disjoint feasible sets the walk churns forever
+without ever saying so: `rooms ≤ 12` and `depth ≤ 6` together reached the goal in
+0 of 8 seeds, because depth and room count are the same quantity in that family.
+The soft version of the same goal reached it in 5 of 8. Use hard requirements for
+invariants only.
+
+**A single temperature never settles.** The Metropolis filter keeps accepting
+steps away from the target right up to the last iteration, so the result is
+wherever the walk happened to stop. Cooling over the run (`cooling`, default 5%
+of the starting temperature) lets it roam early and commit late; it is the
+difference between `--loops 0` returning three loops and returning zero.
+
+### Some things are impossible, and it is worth knowing which
+
+Most of the obvious knobs are not free variables. In a finished dungeon every
+half-edge is glued to its complement, so for each wall label the two sides must
+appear equally often. That is a linear system on how many times each primitive is
+used, and every quantity a constraint could name is a linear function of that
+usage vector. The achievable space is a cone, usually far smaller than the
+primitive count suggests, and it can be solved for before generating anything.
+
+`DGGFeasibility` reports it. For `cells`:
 
 ```
 feasibility: 6 primitives, 5 edge labels, usage cone dimension 2
@@ -164,31 +258,20 @@ feasibility: 6 primitives, 5 edge labels, usage cone dimension 2
     cell|cell@90° + rock|cell@90° = cell|rock@0°
     cell|cell@90° + cell|rock@90° = cell|rock@0°
     cell|cell@90°          can be 0.0% – 33.3% of all walls
-    rock|cell@90°          can be 0.0% – 25.0% of all walls
   limit: no junction in the example has 4 or more walls meeting, so no output
          can contain a crossing — only corners and T-junctions
   limit: cell|cell walls only at 90°
 ```
 
 So "make half my walls interior partitions" is provably impossible for this
-example at any size, seed or iteration count — and the tool can say so up front
+example at any size, seed or iteration count — and the tool says so up front
 instead of missing the target quietly for 300 iterations. For `warren` the report
 reads *"no chamber|chamber wall exists, so two chamber rooms can never share
 one"*, which is a thing an author can act on: draw two adjoining chambers.
 
-This is a necessary condition, not a sufficient one — it ignores planarity and
+It is a necessary condition, not a sufficient one — it ignores planarity and
 drawability — so an unreachable request is a definite no and a reachable one is a
 maybe.
-
-Cycle rank (`E − V + 1`) is worth a caveat. For a connected plane graph it equals
-the bounded-face count exactly, so on these examples it is just the room count in
-disguise and constraining it is the same as constraining size. The quantity that
-actually distinguishes a donut from spaghetti is the cycle rank of the *dual* —
-the room-adjacency graph — and this pipeline does not model room adjacency at
-all. Rooms are sealed boxes; there are no doors. That is the real gap, and it is
-fixable in the example format rather than the algorithm: add a `door` face or
-wall label and it becomes a first-class citizen of the grammar automatically,
-because labels *are* the similarity relation.
 
 ## What works, and what does not
 
@@ -265,6 +348,8 @@ core/
   dgg_grammar.gd     hierarchy construction and rule discovery        §5, Alg. 1–2
   dgg_generator.gd   the random walk over locally similar shapes      §6.1, Alg. 3
   dgg_feasibility.gd which label ratios the grammar can ever produce
+  dgg_topology.gd    rooms, doorways and the room-adjacency graph
+  dgg_goals.gd       soft targets, hard requirements, proposal bias
   dgg_layout.gd      angle graph → drawing                            §6.2–§6.3
   dgg_linalg.gd      dense solver with nullspace                      §6.2
   dgg_svg.gd         SVG output

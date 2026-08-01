@@ -12,6 +12,8 @@ const EXAMPLES := [
 	"res://examples/vaults.json",
 	"res://examples/burrow.json",
 	"res://examples/warren.json",
+	"res://examples/lair.json",
+	"res://examples/sanctum.json",
 ]
 
 @onready var _example_picker: OptionButton = %ExamplePicker
@@ -62,7 +64,7 @@ func _regenerate() -> void:
 		_grammar_source = key
 
 	var generator := DGGGenerator.new(grammar, int(_seed_field.value))
-	generator.configure_lengths(example.min_edge_length, example.max_edge_length)
+	generator.configure(example)
 	generator.target_vertices = int(_target_field.value)
 	dungeon = generator.generate(int(_iterations_field.value))
 	_write_report(generator)
@@ -93,9 +95,10 @@ func _write_report(generator: DGGGenerator) -> void:
 	if dungeon == null:
 		lines.append("[color=#e08]No starter rule produced a drawable shape.[/color]")
 	else:
-		lines.append("[b]Dungeon[/b]  %d vertices, %d edges, %d rooms"
-				% [dungeon.vertex_count, dungeon.edge_count(),
-				_room_count()])
+		lines.append("[b]Dungeon[/b]  %d vertices, %d edges"
+				% [dungeon.vertex_count, dungeon.edge_count()])
+		lines.append("  %s" % DGGTopology.analyse(dungeon, generator.outer_face)
+				.summary().replace("\n", "\n  "))
 		lines.append("  %d of %d proposals accepted (%d unplaceable, %d disconnected, "
 				% [generator.accepted, generator.accepted + generator.rejected,
 				generator.unmatched, generator.disconnected]
