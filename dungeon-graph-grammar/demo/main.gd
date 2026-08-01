@@ -26,6 +26,7 @@ const EXAMPLES := [
 var example: DGGExample
 var grammar: DGGGrammar
 var dungeon: DGGGraph
+var _feasibility: DGGFeasibility
 var _grammar_source := ""
 
 
@@ -49,6 +50,8 @@ func _regenerate() -> void:
 		_report.text = "[color=#e08]could not load %s[/color]" % path
 		return
 
+	_feasibility = DGGFeasibility.analyse(example)
+
 	# Deriving the grammar is the expensive half, so only redo it when the example
 	# or the search depth actually changed.
 	var key := "%s|%d" % [path, int(_generations_field.value)]
@@ -69,6 +72,8 @@ func _regenerate() -> void:
 func _write_report(generator: DGGGenerator) -> void:
 	var lines := PackedStringArray()
 	lines.append("[b]Example[/b]  %s" % example.summary().replace("\n", "\n  "))
+	lines.append("")
+	lines.append("[b]Reachable[/b]  %s" % _feasibility.summary().replace("\n", "\n"))
 	lines.append("")
 	lines.append("[b]Grammar[/b]  %d rules, %d graphs in the hierarchy%s"
 			% [grammar.rules.size(), grammar.hierarchy.size(),
@@ -91,9 +96,11 @@ func _write_report(generator: DGGGenerator) -> void:
 		lines.append("[b]Dungeon[/b]  %d vertices, %d edges, %d rooms"
 				% [dungeon.vertex_count, dungeon.edge_count(),
 				_room_count()])
-		lines.append("  %d of %d proposals accepted (%d unplaceable, %d non-planar, %d undrawable)"
+		lines.append("  %d of %d proposals accepted (%d unplaceable, %d disconnected, "
 				% [generator.accepted, generator.accepted + generator.rejected,
-				generator.unmatched, generator.nonplanar, generator.undrawable])
+				generator.unmatched, generator.disconnected]
+				+ "%d non-planar, %d unrealisable, %d undrawable)"
+				% [generator.nonplanar, generator.unrealisable, generator.undrawable])
 	_report.text = "\n".join(lines)
 
 
@@ -101,7 +108,7 @@ func _room_count() -> int:
 	var outer := example.labels.face_id(example.outer_face)
 	var n := 0
 	for face in dungeon.trace_faces():
-		if face["label"] != outer and _area(face["vertices"]) > 0.0:
+		if face["label"] != outer and _area(face["vertices"]) < 0.0:
 			n += 1
 	return n
 
@@ -136,7 +143,7 @@ func _draw_view() -> void:
 	var outer := example.labels.face_id(example.outer_face)
 	for face in dungeon.trace_faces():
 		var verts: PackedInt32Array = face["vertices"]
-		if verts.size() < 3 or face["label"] == outer or _area(verts) <= 0.0:
+		if verts.size() < 3 or face["label"] == outer or _area(verts) >= 0.0:
 			continue
 		var pts := PackedVector2Array()
 		for v in verts:

@@ -96,9 +96,19 @@ godot --headless --path . --script res://tools/generate.gd -- \
 # inspect the primitives and rules found for an example
 godot --headless --path . --script res://tools/inspect.gd -- examples/cells.json 3
 
+# what could a perfect generator ever do with this grammar?
+godot --headless --path . --script res://tools/ceiling.gd -- vaults 5
+
+# which label ratios are reachable at all
+godot --headless --path . --script res://tools/label_conservation.gd
+
 # tests
 godot --headless --path . --script res://tests/run_tests.gd
 ```
+
+`generate.gd` takes `--seed`, `--iterations`, `--generations`, `--target` (a
+vertex-count goal, steered by the Metropolis filter of §6.3) and `--hierarchy`
+(the cap on stored graphs during rule discovery).
 
 ## Authoring an example
 
@@ -128,34 +138,120 @@ Rooms are polygons. Anything a polygon does not border is the outer face.
 - `angle_epsilon` (default 0.5°) sets how close two walls must be in angle to
   count as the same label. Widen it to make a hand-drawn example generalise more.
 
+## Constraining the output
+
+Local similarity is a promise about every junction and nothing else, so global
+structure drifts. Generating from the two-room `cells` example gives a dungeon
+with 19 holes; the input has 2. That is not a bug — every corner is still a
+corner from the example — but "locally similar" and "what I wanted" are different
+things, and the gap is where a user needs control.
+
+The useful thing to know first is that **most of the obvious knobs are not free
+variables.** In a finished dungeon every half-edge is glued to its complement, so
+for each wall label the two sides must appear equally often. That is a linear
+system on how many times each primitive is used, and every quantity a constraint
+could name — vertex count, room count, each label's count — is a linear function
+of that usage vector. The achievable space is therefore a cone, usually far
+smaller than the primitive count suggests, and it can be solved for in
+milliseconds before generating anything.
+
+`DGGFeasibility` does that and reports it. For `cells`:
+
+```
+feasibility: 6 primitives, 5 edge labels, usage cone dimension 2
+  3 relation(s) hold in every possible output:
+    rock|cell@0° = cell|rock@0°
+    cell|cell@90° + rock|cell@90° = cell|rock@0°
+    cell|cell@90° + cell|rock@90° = cell|rock@0°
+    cell|cell@90°          can be 0.0% – 33.3% of all walls
+    rock|cell@90°          can be 0.0% – 25.0% of all walls
+  limit: no junction in the example has 4 or more walls meeting, so no output
+         can contain a crossing — only corners and T-junctions
+  limit: cell|cell walls only at 90°
+```
+
+So "make half my walls interior partitions" is provably impossible for this
+example at any size, seed or iteration count — and the tool can say so up front
+instead of missing the target quietly for 300 iterations. For `warren` the report
+reads *"no chamber|chamber wall exists, so two chamber rooms can never share
+one"*, which is a thing an author can act on: draw two adjoining chambers.
+
+This is a necessary condition, not a sufficient one — it ignores planarity and
+drawability — so an unreachable request is a definite no and a reachable one is a
+maybe.
+
+Cycle rank (`E − V + 1`) is worth a caveat. For a connected plane graph it equals
+the bounded-face count exactly, so on these examples it is just the room count in
+disguise and constraining it is the same as constraining size. The quantity that
+actually distinguishes a donut from spaghetti is the cycle rank of the *dual* —
+the room-adjacency graph — and this pipeline does not model room adjacency at
+all. Rooms are sealed boxes; there are no doors. That is the real gap, and it is
+fixable in the example format rather than the algorithm: add a `door` face or
+wall label and it becomes a first-class citizen of the grammar automatically,
+because labels *are* the similarity relation.
+
 ## What works, and what does not
 
-The grammar derivation is the part this repository implements properly. It is
-tested against the worked examples in the paper — the Figure 3 gluing, the
-`a ā → ε` / `a ∨ ā ∧ → ε` rewrites, boundary-preservation and simplicity of every
-derived rule, and the local-similarity guarantee on both the hierarchy and the
-output. `examples/cells.json` grows from two rooms into chains of twenty-odd
-rooms with correct labels, angles and planarity.
+`cells` generates: two rooms in, ~40 vertices and 19 rooms out, all junctions
+drawn from the example, planar, correct angles. `vaults` and `burrow` accept
+rewrites but oscillate without growing — their usable moves preserve size.
+`warren` still accepts nothing.
 
-**Generation is weaker than the paper's.** Applying a rule means finding its
-source side inside the current dungeon and swapping in the other side. A rule
-guarantees the two sides present the same boundary, but *not* that the pieces were
-sitting in the dungeon in the arrangement the rule assumed — nested the wrong way
-round, or on opposite sides of a corridor. Those splices produce a graph that does
-not embed in the plane, and are caught after the fact by Euler's formula
-(`V - E + F = 2`) rather than avoided in advance. On dense, highly regular examples
-such as `vaults.json` and `warren.json` the valid arrangements are rare enough that
-the walk stalls at the starting shape.
+The stall was diagnosed by measurement, and it turned out to be three unrelated
+things wearing one counter:
 
-The fix is to verify the arrangement while matching — walk the hole the cut would
-leave and require the sockets to come round in the order the rule's boundary
-string prescribes — and to enumerate placements in that order rather than
-sampling them. `DGGGenerator._all_placements` is where that belongs.
+1. **The acceptance gate was testing the wrong invariant.** `V − E + F = 2` says
+   the rotation system embeds on a sphere. It says nothing about the *angles*,
+   which are the entire content of local similarity. Two failures slipped
+   through: a face that winds through 720° instead of 360°, and a face whose edge
+   directions all lie in one half-plane, so `Σ s·u = 0` has no solution with every
+   length positive. `DGGGraph.faces_are_realisable` now checks both. It rejected
+   282 of 438 audited candidates with zero false positives, and cut wasted layout
+   work sharply (undrawable proposals on `cells`: 2057 → 569, wall-clock 80s →
+   29s; on `vaults`: 403 → 0).
+2. **`V − E + F = 2` also fails for a graph in two planar pieces**, which scores
+   4. Disconnection was being reported as non-planarity, and the two have
+   completely different causes. They are counted separately now.
+3. **Rule discovery was producing only splitting rules.** At hierarchy depth 3, no
+   two graphs share a boundary string on any of the four examples — so a rule
+   *cannot* replace one graph with a single other one, and every rule is forced to
+   shatter its left side into pieces. Splitting rules are exactly the fragile
+   kind: applied one way they disconnect the host, applied the other they need
+   the pieces to sit in the arrangement the rule assumed. Matches only start
+   appearing at depth 5 (`cells` 9, `vaults` 4, `burrow` 8). The tools were
+   overriding `DGGGrammar`'s own default of 5 down to 3, which was the proximate
+   cause of the `vaults` stall.
 
-Also not implemented: the §7 extension to 3D, and the §5.6 test for graphs with no
-complete descendants (the hierarchy is bounded by size instead, which §5.7 allows
-but which costs the guarantee that the grammar reaches *every* locally similar
-shape).
+An earlier version of this file blamed unverified piece *arrangement* for all of
+it. That was wrong for the single-component case: a match preserves every
+vertex's rotation ring exactly, so cutting out one connected piece always leaves
+its sockets in boundary-string order. Measured over three examples, the
+single-component direction produced **zero** genuinely non-planar results. The
+arrangement gap is real, but only where the source side has several components.
+
+Two further changes came out of the same work. Rule selection is now adaptive —
+with 632 rules a uniform draw spends nearly every proposal on a rule that matches
+nothing, and weighting by recent success took `vaults` from 4 accepted proposals
+to 194 and `burrow` from 0 to 144. And `trace_faces` was labelling every face
+with the region on the walk's *left* when the walk actually keeps it on the
+right, so on `cells` all three faces came back labelled `cell` including the
+surrounding rock; a renderer only looked right because every room shared a
+colour.
+
+**What is still broken.** `warren` and `burrow` cannot grow. `vaults` oscillates:
+at depth 5 its usable moves are size-preserving, so a size target can never be
+satisfied. Matching remains the dominant loss — most proposals die because the
+rule's left side occurs nowhere in the dungeon — and the remedy is upstream, in
+getting rule discovery to produce left sides that actually occur. `max_hierarchy`
+is hit at depth 5 on three of the four examples, so every rule set here is
+truncated and the measured ceilings are lower bounds. `tools/ceiling.gd`
+enumerates every placement of every rule with no sampling, which is the right
+harness for judging whether a change helped: if the ceiling is zero, no amount of
+cleverness in the placement search will do anything.
+
+Also not implemented: the §7 extension to 3D, and the §5.6 test for graphs with
+no complete descendants (the hierarchy is bounded by size instead, which §5.7
+allows but which costs the guarantee of reaching *every* locally similar shape).
 
 ## Layout
 
@@ -168,11 +264,12 @@ core/
   dgg_rule.gd        one double-pushout production rule               §5
   dgg_grammar.gd     hierarchy construction and rule discovery        §5, Alg. 1–2
   dgg_generator.gd   the random walk over locally similar shapes      §6.1, Alg. 3
+  dgg_feasibility.gd which label ratios the grammar can ever produce
   dgg_layout.gd      angle graph → drawing                            §6.2–§6.3
   dgg_linalg.gd      dense solver with nullspace                      §6.2
   dgg_svg.gd         SVG output
 demo/                the interactive front end
-tools/               headless generate / inspect / smoke test
+tools/               generate, inspect, ceiling, label-conservation
 tests/               headless test suite
 examples/            example floorplans
 ```

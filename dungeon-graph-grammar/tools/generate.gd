@@ -13,8 +13,9 @@ func _initialize() -> void:
 	var out_path := "user://dungeon.svg"
 	var seed := 1
 	var iterations := 300
-	var generations := 3
+	var generations := 5
 	var target := 0
+	var hierarchy := 0
 	var positional: Array[String] = []
 	var i := 0
 	while i < args.size():
@@ -24,6 +25,7 @@ func _initialize() -> void:
 			"--iterations": iterations = int(args[i + 1]); i += 1
 			"--generations": generations = int(args[i + 1]); i += 1
 			"--target": target = int(args[i + 1]); i += 1
+			"--hierarchy": hierarchy = int(args[i + 1]); i += 1
 			_: positional.append(a)
 		i += 1
 	if positional.size() > 0:
@@ -41,6 +43,8 @@ func _initialize() -> void:
 
 	var grammar := DGGGrammar.from_example(example)
 	grammar.max_generations = generations
+	if hierarchy > 0:
+		grammar.max_hierarchy = hierarchy
 	var t0 := Time.get_ticks_msec()
 	grammar.build()
 	print("%s\n  grammar in %d ms" % [grammar.summary(), Time.get_ticks_msec() - t0])
@@ -58,8 +62,9 @@ func _initialize() -> void:
 		dungeon.vertex_count, dungeon.edge_count(),
 		generator.accepted, generator.rejected, Time.get_ticks_msec() - t0,
 	])
-	print("  rejected: %d unplaceable, %d non-planar, %d undrawable"
-			% [generator.unmatched, generator.nonplanar, generator.undrawable])
+	print("  rejected: %d unplaceable, %d disconnected, %d non-planar, %d unrealisable, %d undrawable"
+			% [generator.unmatched, generator.disconnected, generator.nonplanar,
+				generator.unrealisable, generator.undrawable])
 	for why in generator.failure_reasons:
 		print("    %5d  %s" % [generator.failure_reasons[why], why])
 

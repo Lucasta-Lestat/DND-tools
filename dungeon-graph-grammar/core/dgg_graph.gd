@@ -250,10 +250,12 @@ func _code_from(root: int) -> String:
 
 ## Recovers the faces of a complete graph by walking the rotation system.
 ##
-## From a spoke, step to its partner and take the next spoke counter-clockwise:
-## that traces the face lying to the spoke's left. Interior faces come out
-## counter-clockwise (positive area) and the unbounded face clockwise, which is how
-## renderers tell the rooms from the surrounding rock.
+## From a spoke, step to its partner and take the next spoke counter-clockwise.
+## That keeps the face being traced on the walk's [b]right[/b], so a bounded room
+## comes out clockwise (negative signed area) and the unbounded outside comes out
+## counter-clockwise (positive area). Renderers use the sign to tell rooms from the
+## surrounding rock; getting it backwards fills the whole footprint with one colour
+## and only looks right when every room shares a label.
 ##
 ## Returns an array of [code]{label, vertices}[/code].
 func trace_faces() -> Array:
@@ -273,22 +275,103 @@ func trace_faces() -> Array:
 			var ring: PackedInt32Array = vertex_spokes[spoke_vertex[p]]
 			d = ring[(ring.find(p) + 1) % ring.size()]
 		out.append({
-			"label": labels.head_left_face(spoke_head[start]),
+			"label": labels.head_right_face(spoke_head[start]),
 			"vertices": cycle,
 		})
 	return out
 
 
-## [code]V - E + F[/code] for a complete graph. A rotation system that really does
-## embed in the plane gives 2; anything else describes a surface with handles and
-## has no planar drawing at all.
+## [code]V - E + F[/code] for a complete graph. A [i]connected[/i] rotation system
+## that really does embed in the plane gives 2; 0 means a handle, and no planar
+## drawing exists. Note the count is per component: a graph in [code]c[/code] planar
+## pieces scores [code]2c[/code], not 2, because [method trace_faces] walks each
+## component's outer face separately. Test [method is_one_piece] first, or a merely
+## disconnected result looks like a non-planar one.
 ##
 ## Worth checking because gluing is a local operation: a rule guarantees that its
 ## two sides present the same boundary, but not that the pieces were sitting in the
-## host graph in the arrangement the rule assumed. This is the cheap global test
-## that catches it, well before the drawing stage would.
+## host graph in the arrangement the rule assumed. Measured, that only ever bites
+## when the source side has several components — cutting out a single connected
+## piece preserves every rotation ring, so the hole's sockets always come round in
+## boundary-string order and the result is planar.
+##
+## This test is necessary but not sufficient for a drawing to exist: it knows
+## nothing about the angles. See [method faces_are_realisable] for that half.
 func euler_characteristic() -> int:
 	return vertex_count - edge_count() + trace_faces().size()
+
+
+## The faces of a complete graph, as the spokes each face walk traverses.
+func _face_spokes() -> Array:
+	var out: Array = []
+	var visited := {}
+	for start in spoke_count():
+		if visited.has(start) or spoke_partner[start] < 0:
+			continue
+		var cycle := PackedInt32Array()
+		var d := start
+		while not visited.has(d):
+			visited[d] = true
+			cycle.append(d)
+			var p: int = spoke_partner[d]
+			if p < 0:
+				break
+			var ring: PackedInt32Array = vertex_spokes[spoke_vertex[p]]
+			d = ring[(ring.find(p) + 1) % ring.size()]
+		out.append(cycle)
+	return out
+
+
+## Whether every face could be drawn with the angles its labels demand.
+##
+## [method euler_characteristic] only says the rotation system embeds on a sphere.
+## It says nothing about the angles, and the angles are the whole point of local
+## similarity. Two things can still go wrong, and both are invisible to Euler:
+##
+## - A face may [b]wind twice[/b]. Its tangent turns through 720° rather than 360°,
+##   so it closes only by lapping itself. The boundary algebra rules this out on a
+##   half-built graph — that is what [code]sum(turns) == 1[/code] means — but after
+##   surgery nothing re-checks it.
+## - A face's edge directions may all lie in one [b]half-plane[/b]. Closing it needs
+##   [code]Σ s·u = 0[/code] with every [code]s > 0[/code], which is possible exactly
+##   when the sorted directions leave no angular gap wider than 180°. Otherwise the
+##   only solution has a zero-length edge.
+##
+## Both are cheap and certain here; left to [DGGLayout] they cost a whole rejection
+## sampling budget and come back as a misleading "walls cross" or "edge length 0.00".
+func faces_are_realisable() -> bool:
+	for cycle in _face_spokes():
+		var k: int = (cycle as PackedInt32Array).size()
+		if k < 2:
+			return false  # a face bounded by one spoke is a self-loop
+		var turning := 0.0
+		var angles: Array[float] = []
+		for i in k:
+			var here: int = cycle[i]
+			var there: int = cycle[(i + 1) % k]
+			# A walk that leaves along the spoke it arrived on has reached a
+			# dead end, and reverses by exactly 180 degrees. Angle arithmetic
+			# cannot say which way it swung, so decline to judge rather than risk
+			# rejecting a drawable graph; the layout stage will settle it. The
+			# polygon authoring path cannot produce a degree-1 vertex, so this is
+			# a guard against future inputs, not a case seen today.
+			if there == spoke_partner[here]:
+				return true
+			var a := labels.head_direction(spoke_head[here])
+			var b := labels.head_direction(spoke_head[there])
+			turning += DGGLabels.normalize_180(b - a)
+			angles.append(a)
+		if absf(absf(turning) - 360.0) > 1.0:
+			return false
+		angles.sort()
+		var widest := 0.0
+		for i in k:
+			var lo: float = angles[i]
+			var hi: float = angles[(i + 1) % k] + (360.0 if i == k - 1 else 0.0)
+			widest = maxf(widest, hi - lo)
+		if widest > 180.0 + 1e-3:
+			return false
+	return true
 
 
 func is_one_piece() -> bool:

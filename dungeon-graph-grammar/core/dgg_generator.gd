@@ -43,6 +43,9 @@ var target_vertices: int = 0
 ## How readily the walk accepts a step away from [member target_vertices]. Larger
 ## values wander more.
 var temperature: float = 2.0
+## How sharply rule selection favours rules that have worked before. 1.0 disables
+## the bias and draws uniformly.
+var learning_rate: float = 1.6
 
 var accepted: int = 0
 var rejected: int = 0
@@ -51,6 +54,13 @@ var unmatched: int = 0
 ## Proposals whose splice produced a rotation system that does not embed in the
 ## plane, so no drawing of it could exist.
 var nonplanar: int = 0
+## Proposals whose splice left the graph in more than one piece. Every rule here
+## splits, so this is the normal outcome when the host does not tie the pieces
+## back together — it is not a planarity failure and used to be counted as one.
+var disconnected: int = 0
+## Proposals that embed in the plane but cannot be drawn at the angles their labels
+## demand: a face that winds twice, or one whose directions sit in a half-plane.
+var unrealisable: int = 0
 ## Proposals thrown out because no valid drawing could be found for them.
 var undrawable: int = 0
 ## Tally of [member DGGLayout.last_failure] strings, for diagnosing an example
@@ -77,6 +87,8 @@ func generate(iterations: int, start: DGGGraph = null) -> DGGGraph:
 	unmatched = 0
 	undrawable = 0
 	nonplanar = 0
+	disconnected = 0
+	unrealisable = 0
 	failure_reasons = {}
 	var current := start.duplicate_graph() if start else _seed_graph()
 	if current == null:
@@ -87,16 +99,29 @@ func generate(iterations: int, start: DGGGraph = null) -> DGGGraph:
 	var applicable := grammar.rules.filter(func(r): return not r.is_starter())
 	if applicable.is_empty():
 		return current
+	# A deep hierarchy yields hundreds of rules, and on any given dungeon most of
+	# them match nothing. Drawing uniformly spends nearly every proposal on a rule
+	# that cannot apply here. Instead, let the walk learn: rules that produce a
+	# usable rewrite get drawn more often, rules that keep failing fade out. The
+	# weights are per-run, so a rule that stops applying as the shape changes
+	# decays back down on its own.
+	var weights := PackedFloat32Array()
+	weights.resize(applicable.size())
+	weights.fill(1.0)
+
 	for i in iterations:
 		var proposal: DGGGraph = null
 		var chosen: DGGRule = null
 		var chosen_backwards := false
 		for tries in proposals_per_iteration:
-			var rule: DGGRule = applicable[rng.randi() % applicable.size()]
+			var pick := _weighted_pick(weights)
+			var rule: DGGRule = applicable[pick]
 			var backwards := rng.randi() % 2 == 0
 			var candidate := _apply(current, rule, backwards)
 			if candidate == null:
+				weights[pick] = maxf(weights[pick] / learning_rate, 0.02)
 				continue
+			weights[pick] = minf(weights[pick] * learning_rate, 32.0)
 			if not layout.realise(candidate):
 				undrawable += 1
 				var why := layout.last_failure
@@ -113,6 +138,19 @@ func generate(iterations: int, start: DGGGraph = null) -> DGGGraph:
 		accepted += 1
 		step_applied.emit(i, chosen, chosen_backwards)
 	return current
+
+
+## Draws an index in proportion to its weight.
+func _weighted_pick(weights: PackedFloat32Array) -> int:
+	var total := 0.0
+	for w in weights:
+		total += w
+	var r := rng.randf() * total
+	for i in weights.size():
+		r -= weights[i]
+		if r <= 0.0:
+			return i
+	return weights.size() - 1
 
 
 ## The optional Metropolis filter of §6.3, requirement 4.
@@ -166,11 +204,13 @@ func _apply(graph: DGGGraph, rule: DGGRule, backwards: bool) -> DGGGraph:
 	if keep_connected and target.is_empty():
 		return null
 
-	# Where the pieces sit matters. A rule promises its two sides share a boundary,
-	# but a multi-piece side can be found in the host in arrangements the rule never
-	# meant — nested the wrong way round, or on opposite sides of a corridor — and
-	# splicing those produces a graph that does not embed in the plane at all.
-	# Rather than guess, enumerate the placements and take the first that works.
+	# Where the pieces sit matters, but only when there are several of them. A rule
+	# promises its two sides share a boundary; a MULTI-piece side can still be found
+	# in the host in arrangements the rule never meant — on opposite sides of a
+	# corridor, say — and splicing those gives a graph with a handle. A single
+	# connected source cannot do that: the match preserves every rotation ring, so
+	# the hole's sockets come round in boundary-string order by construction. Rather
+	# than guess, enumerate the placements and take the first that works.
 	var placements := _all_placements(graph, source)
 	if placements.is_empty():
 		unmatched += 1
@@ -233,9 +273,19 @@ func _attempt(graph: DGGGraph, rule: DGGRule, backwards: bool,
 	var result := _splice(graph, removed, target, sockets, self_pair, target_spokes)
 	if result == null:
 		return null
-	# Euler's formula settles whether the arrangement was the one the rule assumed.
-	if not result.is_one_piece() or result.euler_characteristic() != 2:
+	# Three separate things can be wrong with a splice, and lumping them together
+	# hides which one is actually biting.
+	if not result.is_one_piece():
+		disconnected += 1
+		return null
+	if result.euler_characteristic() != 2:
 		nonplanar += 1
+		return null
+	# Planar as a rotation system is not the same as drawable at these angles. Catch
+	# doubly-wound and half-plane faces here rather than making DGGLayout discover
+	# them by exhausting its sampling budget.
+	if not result.faces_are_realisable():
+		unrealisable += 1
 		return null
 	return result
 

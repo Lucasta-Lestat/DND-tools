@@ -35,6 +35,8 @@ var max_hierarchy: int = 1200
 ## Ceiling on how deeply a boundary may be split into sub-groups when searching
 ## for a rule.
 var max_split_depth: int = 3
+## How many candidate decompositions to weigh before settling for the best so far.
+var max_decompositions_examined: int = 8
 ## Ceiling on starter rules. The simplest complete shapes are kept.
 var max_starter_rules: int = 48
 ## Keep loop glues that produce self-loops or doubled edges. They are legitimate
@@ -181,13 +183,23 @@ func _children(g: DGGGraph) -> Array[DGGGraph]:
 	return out
 
 
-## Complexity order (§5.1): fewer half-edges is simpler; ties break by age, since
-## graphs added earlier were reached by fewer gluings.
+## Complexity order (§5.1): fewer half-edges is simpler. The paper breaks ties by
+## age; we break them by vertex count first, because that is what lets a rule
+## replace a graph with a single equally-bounded but smaller one. Without it the
+## only same-boundary candidates are older graphs, so every rule is forced to
+## split, and a splitting rule is exactly the kind that fails when applied — it
+## disconnects the host going one way and needs a lucky arrangement going the
+## other. Lexicographic on (half-edges, vertices, age) is still a strict order, so
+## reduction still terminates.
 func _simpler(a: int, b: int) -> bool:
 	var ka := hierarchy[a].boundary.size()
 	var kb := hierarchy[b].boundary.size()
 	if ka != kb:
 		return ka < kb
+	var va := hierarchy[a].vertex_count
+	var vb := hierarchy[b].vertex_count
+	if va != vb:
+		return va < vb
 	return a < b
 
 
@@ -258,10 +270,22 @@ func _resweep() -> void:
 
 # --- Rule discovery (Algorithm 2) ---------------------------------------------
 
+## Candidates in the order the rule search should try them: widest boundary first.
+##
+## Not the same as complexity order. A rule wants the FEWEST pieces it can get
+## away with, and a piece that covers more of the target boundary leaves less for
+## anything else to fill. Trying the simplest graphs first — which is the order
+## complexity gives — finds the maximal shattering every time, and shattering is
+## what makes rules unusable.
 func _sorted_pool() -> Array[int]:
 	if _pool_dirty:
 		_pool = _irreducible.duplicate()
-		_pool.sort_custom(func(a, b): return _simpler(a, b))
+		_pool.sort_custom(func(a, b):
+			var ka := hierarchy[a].boundary.size()
+			var kb := hierarchy[b].boundary.size()
+			if ka != kb:
+				return ka > kb
+			return a < b)
 		_pool_dirty = false
 	return _pool
 
@@ -287,6 +311,11 @@ func _find_group(target: DGGBoundary, than: int, depth: int) -> Array:
 	for h in target.heads:
 		want[h] = int(want.get(h, 0)) + 1
 
+	# Keep looking after the first success: the first decomposition found is not
+	# the best one, and how many pieces a rule has decides whether it can ever be
+	# applied. A single-piece cover is unbeatable, so stop there.
+	var best: Array = []
+	var examined := 0
 	for cand in _sorted_pool():
 		if not _simpler(cand, than):
 			continue
@@ -295,6 +324,8 @@ func _find_group(target: DGGBoundary, than: int, depth: int) -> Array:
 			continue
 		if not _fits(_head_counts[cand], want):
 			continue
+		if not best.is_empty() and r.size() < n / best.size():
+			break  # every remaining candidate is too narrow to do better
 		for start in n:
 			if target.heads[start] != r.heads[0]:
 				continue
@@ -302,9 +333,17 @@ func _find_group(target: DGGBoundary, than: int, depth: int) -> Array:
 			positions.resize(r.size())
 			positions[0] = start
 			var result := _place(target, r, positions, 1, start, start, cand, than, depth)
-			if not result.is_empty():
-				return result
-	return []
+			if result.is_empty():
+				continue
+			if best.is_empty() or result.size() < best.size():
+				best = result
+				if best.size() == 1:
+					return best
+			examined += 1
+			break  # one placement per candidate is enough to judge it
+		if examined >= max_decompositions_examined:
+			break
+	return best
 
 
 static func _fits(counts: Dictionary, want: Dictionary) -> bool:

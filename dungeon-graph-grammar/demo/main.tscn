@@ -54,7 +54,7 @@ unique_name_in_owner = true
 layout_mode = 2
 min_value = 1.0
 max_value = 6.0
-value = 3.0
+value = 5.0
 
 [node name="SeedLabel" type="Label" parent="Split/Left/Controls"]
 layout_mode = 2

@@ -10,6 +10,7 @@ const SUITES := [
 	"res://tests/test_example.gd",
 	"res://tests/test_grammar.gd",
 	"res://tests/test_generator.gd",
+	"res://tests/test_feasibility.gd",
 ]
 
 var passed := 0

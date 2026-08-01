@@ -35,9 +35,9 @@ static func render(graph: DGGGraph, example: DGGExample = null) -> String:
 		var pts := PackedVector2Array()
 		for v in verts:
 			pts.append(_to_svg(graph.vertex_pos[v], lo))
-		# trace_faces walks interior faces counter-clockwise, so they have positive
-		# signed area; the one enclosing everything runs the other way.
-		if _signed_area(pts) <= 0.0:
+		# trace_faces keeps each face on its right, so rooms come out clockwise
+		# (negative area) and the unbounded outside counter-clockwise.
+		if _signed_area(pts) >= 0.0:
 			continue
 		if face["label"] == outer:
 			continue

@@ -24,6 +24,8 @@ func _initialize() -> void:
 			i, example.primitive_counts[i], str(example.primitives[i].boundary),
 		])
 
+	print("\n%s" % DGGFeasibility.analyse(example).summary())
+
 	var grammar := DGGGrammar.from_example(example)
 	if args.size() > 1:
 		grammar.max_generations = int(args[1])
