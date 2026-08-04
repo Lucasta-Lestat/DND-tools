@@ -43,6 +43,7 @@ class Line:
     role: str
     top: float
     x0: float
+    size: float = 0.0
 
 
 @dataclass
@@ -55,14 +56,18 @@ class Block:
     section: str = ""
 
 
-def classify_font(fontname: str, size: float, body_size: float) -> str:
+def classify_font(fontname: str, size: float, body_size: float,
+                  section_ratio: float = 1.8) -> str:
     """Map a font/size pair onto a structural role."""
     lowered = fontname.lower()
-    if size >= body_size * 2:  # drop caps / big section letters
+    if size >= body_size * section_ratio:  # drop caps / chapter openers
         return SECTION
-    if "bold" in lowered or "black" in lowered or "heavy" in lowered:
+    # Size carries the structure even when the display face has no bold cut.
+    if size >= body_size * 1.25:
         return HEADING
-    if "italic" in lowered or "oblique" in lowered:
+    if any(k in lowered for k in ("bold", "black", "heavy", "semibold")):
+        return HEADING
+    if "italic" in lowered or "oblique" in lowered or lowered.endswith("-it"):
         return SUBTITLE
     return BODY
 
@@ -113,6 +118,25 @@ def detect_gutter(words, page_width: float, body_size: float = 0.0,
     return split
 
 
+def merge_split_words(line: list, max_gap: float = 1.0) -> list:
+    """Rejoin words the extractor split where the font changed mid-word.
+
+    Asking for font attributes makes pdfplumber start a new word whenever they
+    change, so a word whose ligature glyphs come from another subset arrives as
+    "le" + "ft". Real spaces are a couple of points wide; these splits are flush
+    or slightly kerned into each other, so the horizontal gap tells them apart.
+    """
+    merged: list = []
+    for word in line:
+        if merged and -0.5 <= word["x0"] - merged[-1]["x1"] < max_gap:
+            previous = merged[-1]
+            previous["text"] += word["text"]
+            previous["x1"] = word["x1"]
+        else:
+            merged.append(dict(word))
+    return merged
+
+
 def group_into_lines(words, tolerance: float) -> list[list]:
     """Cluster words sharing a baseline, tolerating sub-point vertical jitter."""
     lines: list[list] = []
@@ -124,7 +148,8 @@ def group_into_lines(words, tolerance: float) -> list[list]:
     return lines
 
 
-def page_lines(page, body_size: float, column_split: float | None) -> list[Line]:
+def page_lines(page, body_size: float, column_split: float | None,
+               section_ratio: float = 1.8) -> list[Line]:
     """Extract lines from a page, reading down each column in turn."""
     words = page.extract_words(extra_attrs=["fontname", "size"], keep_blank_chars=False)
     if not words:
@@ -142,16 +167,19 @@ def page_lines(page, body_size: float, column_split: float | None) -> list[Line]
     for column in columns:
         for group in group_into_lines(column, tolerance):
             group.sort(key=lambda w: w["x0"])
+            group = merge_split_words(group)
             text = " ".join(w["text"] for w in group).strip()
             if not text:
                 continue
             # Role = the role of the widest run of characters on the line.
             weights: dict[str, float] = {}
             for w in group:
-                role = classify_font(w["fontname"], w["size"], body_size)
+                role = classify_font(w["fontname"], w["size"], body_size,
+                                     section_ratio)
                 weights[role] = weights.get(role, 0) + len(w["text"])
             role = max(weights, key=weights.get)
-            lines.append(Line(text, role, group[0]["top"], group[0]["x0"]))
+            size = max(w["size"] for w in group)
+            lines.append(Line(text, role, group[0]["top"], group[0]["x0"], size))
 
     return lines
 
@@ -169,16 +197,18 @@ FOLIO_RE = re.compile(r"^[ivxlcdm\d]{1,5}$", re.IGNORECASE)
 
 
 def is_folio(line: Line) -> bool:
-    """Page numbers: a lone numeral, in body type."""
-    return line.role == BODY and bool(FOLIO_RE.fullmatch(line.text.strip()))
+    """Page numbers: a lone numeral, whatever type it is set in."""
+    return bool(FOLIO_RE.fullmatch(line.text.strip()))
 
 
-def build_blocks(lines: list[Line], line_gap: float) -> list[Block]:
+def build_blocks(lines: list[Line], line_gap: float,
+                 skip_heading: re.Pattern | None = None) -> list[Block]:
     """Fold classified lines into entries, joining wrapped lines into paragraphs."""
     blocks: list[Block] = []
     current: Block | None = None
     buffer: list[str] = []
     prev_bottom: float | None = None
+    prev_section_top: float | None = None
 
     def flush_paragraph():
         nonlocal buffer
@@ -193,17 +223,36 @@ def build_blocks(lines: list[Line], line_gap: float) -> list[Block]:
             blocks.append(current)
         current = None
 
+    skipping = False
     for line in lines:
         if line.role == DROP:
             continue
 
-        if line.role == SECTION:
-            flush_block()
-            blocks.append(Block(section=line.text.strip()))
-            prev_bottom = None
+        # A skipped heading takes its whole section with it, up to the next one.
+        if skipping and line.role not in (HEADING, SECTION):
             continue
 
+        if line.role == SECTION:
+            skipping = False
+            # A chapter title set over two lines is still one title.
+            if (blocks and blocks[-1].section and current is None and not buffer
+                    and prev_section_top is not None
+                    and 0 < line.top - prev_section_top < line.size * 1.8):
+                blocks[-1].section = join_wrapped([blocks[-1].section, line.text])
+            else:
+                flush_block()
+                blocks.append(Block(section=line.text.strip()))
+            prev_section_top = line.top
+            prev_bottom = None
+            continue
+        prev_section_top = None
+
         if line.role == HEADING:
+            if skip_heading and skip_heading.search(line.text):
+                flush_block()
+                skipping = True
+                continue
+            skipping = False
             # A headword that wraps onto a second line is still one headword.
             if current is not None and current.heading and not (
                     current.subtitle or current.paragraphs or buffer):
@@ -267,21 +316,29 @@ def estimate_leading(lines: list[Line]) -> float:
 
 
 def extract_blocks(path: Path, first_page: int, last_page: int | None,
-                   column_split: float | None) -> list[Block]:
+                   column_split: float | None, min_size_ratio: float = 0.0,
+                   drop_lines: re.Pattern | None = None,
+                   skip_heading: re.Pattern | None = None,
+                   section_ratio: float = 1.8) -> list[Block]:
     import pdfplumber
 
     with pdfplumber.open(path) as pdf:
         body_size = dominant_body_size(pdf)
+        floor = body_size * min_size_ratio
         pages = pdf.pages[first_page - 1: last_page if last_page else None]
         all_lines: list[Line] = []
         for page in pages:
-            lines = [ln for ln in page_lines(page, body_size, column_split) if not is_folio(ln)]
+            lines = [ln for ln in page_lines(page, body_size, column_split,
+                                             section_ratio)
+                     if not is_folio(ln)
+                     and ln.size >= floor
+                     and not (drop_lines and drop_lines.search(ln.text))]
             all_lines.extend(lines)
             # Page break: force a paragraph flush only if the page ends mid-entry
             # is *not* wanted, so we deliberately do nothing here — entries wrap
             # across pages and columns in this layout.
         leading = estimate_leading(all_lines)
-        return build_blocks(all_lines, leading)
+        return build_blocks(all_lines, leading, skip_heading)
 
 
 # --------------------------------------------------------------------------
@@ -303,7 +360,7 @@ REPLACEMENTS = [
     # Justified letter-spacing also splits words mid-line ("collec- tion").
     # Suspended hyphens ("short- and long-term") are genuine and left alone.
     (r"([a-z]{2,})- (?!and\b|or\b)([A-Za-z]+)", "\\1" + JOIN + "\\2"),
-    (r"\s+([,.;:!?%’'])", r"\1"),                        # "power ." -> "power."
+    (r"\s+([,.;:!?%’'”])", r"\1"),                       # "power ." -> "power."
     (r"([‘“(\[])\s+", r"\1"),
     (r"([.!?])[\s,]*,", r"\1"),                          # ". ," -> "."
     (r",\s*([.!?])", r"\1"),
@@ -539,6 +596,16 @@ def main() -> int:
                     help="spoken marker for section headers ('' to omit)")
     ap.add_argument("--keep-citations", action="store_true",
                     help="read parenthesised source abbreviations aloud")
+    ap.add_argument("--section-size", type=float, default=1.8, metavar="RATIO",
+                    help="text at RATIO x body size or larger starts a new "
+                         "chapter (default 1.8)")
+    ap.add_argument("--min-size", type=float, default=0.0, metavar="RATIO",
+                    help="drop text smaller than RATIO x body size, e.g. 0.95 to "
+                         "skip stat tables and captions set in small type")
+    ap.add_argument("--drop-lines", default=None, metavar="REGEX",
+                    help="drop any line matching this regex")
+    ap.add_argument("--skip-heading", default=None, metavar="REGEX",
+                    help="drop headings matching this regex, and their contents")
     ap.add_argument("--chunk-chars", type=int, default=3000)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--title", default=None, help="ID3 title (default: file name)")
@@ -553,7 +620,12 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Extracting text from {args.pdf.name} ...")
-    blocks = extract_blocks(args.pdf, args.first_page, args.last_page, args.column_split)
+    blocks = extract_blocks(
+        args.pdf, args.first_page, args.last_page, args.column_split,
+        min_size_ratio=args.min_size,
+        drop_lines=re.compile(args.drop_lines) if args.drop_lines else None,
+        skip_heading=re.compile(args.skip_heading) if args.skip_heading else None,
+        section_ratio=args.section_size)
     sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
