@@ -148,38 +148,90 @@ def group_into_lines(words, tolerance: float) -> list[list]:
     return lines
 
 
+def make_line(group: list, body_size: float, section_ratio: float) -> Line | None:
+    """Turn a run of words sharing a baseline into a classified line."""
+    group = merge_split_words(sorted(group, key=lambda w: w["x0"]))
+    text = " ".join(w["text"] for w in group).strip()
+    if not text:
+        return None
+    # Role = the role of the widest run of characters on the line.
+    weights: dict[str, float] = {}
+    for w in group:
+        role = classify_font(w["fontname"], w["size"], body_size, section_ratio)
+        weights[role] = weights.get(role, 0) + len(w["text"])
+    role = max(weights, key=weights.get)
+    # A run-in label — a bold or italic lead-in that continues into the
+    # sentence on the same line — is not a heading. Demanding the line be
+    # almost entirely one face keeps those inside the paragraph, instead of
+    # cutting the sentence in two with a spurious full stop.
+    if role in (HEADING, SUBTITLE) and weights[role] / sum(weights.values()) < 0.9:
+        role = BODY
+    return Line(text, role, group[0]["top"], group[0]["x0"],
+                max(w["size"] for w in group))
+
+
 def page_lines(page, body_size: float, column_split: float | None,
                section_ratio: float = 1.8) -> list[Line]:
-    """Extract lines from a page, reading down each column in turn."""
+    """Extract a page's lines in reading order, column by column.
+
+    Rotated text is dropped: in a designed book it is decoration — a title set
+    running up the margin, letter by letter at varying sizes — and interleaves
+    into the prose as rubble.
+    """
+    page = page.filter(lambda obj: obj.get("upright", True))
     words = page.extract_words(extra_attrs=["fontname", "size"], keep_blank_chars=False)
     if not words:
         return []
 
+    tolerance = max(2.0, body_size * 0.4)
     # Full-width pages (title pages, opening prose) must not be split.
     split = (column_split if column_split is not None
              else detect_gutter(words, page.width, body_size))
-    columns = ([[w for w in words if w["x0"] < split],
-                [w for w in words if w["x0"] >= split]]
-               if split is not None else [words])
+    if split is None:
+        return [ln for group in group_into_lines(words, tolerance)
+                if (ln := make_line(group, body_size, section_ratio))]
 
-    tolerance = max(2.0, body_size * 0.4)
+    # A headline set across both columns is not part of either. Treat it as a
+    # horizontal divider: everything below it, in both columns, follows it.
+    # Without this a spanning title is torn in half, the words left of the
+    # gutter read at one point and the rest at the top of the second column.
+    spanning: list[Line] = []
+    banded: list[list] = []
+    for group in group_into_lines(words, tolerance):
+        crosses = min(w["x0"] for w in group) < split <= max(w["x1"] for w in group)
+        display = all(w["size"] >= body_size * 1.25 for w in group)
+        if crosses and display:
+            if line := make_line(group, body_size, section_ratio):
+                spanning.append(line)
+            continue
+        # A baseline runs across the whole page, so the two columns share it.
+        # Each side has to become its own line or the columns read interleaved.
+        for side in ([w for w in group if w["x0"] < split],
+                     [w for w in group if w["x0"] >= split]):
+            if side:
+                banded.append(side)
+
+    boundaries = [ln.top for ln in spanning]
     lines: list[Line] = []
-    for column in columns:
-        for group in group_into_lines(column, tolerance):
-            group.sort(key=lambda w: w["x0"])
-            group = merge_split_words(group)
-            text = " ".join(w["text"] for w in group).strip()
-            if not text:
-                continue
-            # Role = the role of the widest run of characters on the line.
-            weights: dict[str, float] = {}
-            for w in group:
-                role = classify_font(w["fontname"], w["size"], body_size,
-                                     section_ratio)
-                weights[role] = weights.get(role, 0) + len(w["text"])
-            role = max(weights, key=weights.get)
-            size = max(w["size"] for w in group)
-            lines.append(Line(text, role, group[0]["top"], group[0]["x0"], size))
+
+    def emit_band(low: float, high: float):
+        """Read the left column of this band, then the right."""
+        for want_left in (True, False):
+            for group in banded:
+                top = group[0]["top"]
+                if not (low <= top < high):
+                    continue
+                is_left = min(w["x0"] for w in group) < split
+                if is_left != want_left:
+                    continue
+                if line := make_line(group, body_size, section_ratio):
+                    lines.append(line)
+
+    edges = [-float("inf")] + boundaries + [float("inf")]
+    for i, low in enumerate(edges[:-1]):
+        if i > 0:
+            lines.append(spanning[i - 1])
+        emit_band(low, edges[i + 1])
 
     return lines
 
@@ -315,11 +367,26 @@ def estimate_leading(lines: list[Line]) -> float:
     return gaps[len(gaps) // 2]
 
 
+def parse_page_spec(spec: str | None) -> set[int]:
+    """Parse "5,9,12-14" into the set of page numbers it names."""
+    pages: set[int] = set()
+    for part in (spec or "").replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            pages.update(range(int(start), int(end) + 1))
+        else:
+            pages.add(int(part))
+    return pages
+
+
 def extract_blocks(path: Path, first_page: int, last_page: int | None,
                    column_split: float | None, min_size_ratio: float = 0.0,
                    drop_lines: re.Pattern | None = None,
                    skip_heading: re.Pattern | None = None,
-                   section_ratio: float = 1.8) -> list[Block]:
+                   section_ratio: float = 1.8,
+                   skip_pages: set[int] | None = None) -> list[Block]:
     import pdfplumber
 
     with pdfplumber.open(path) as pdf:
@@ -328,6 +395,9 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
         pages = pdf.pages[first_page - 1: last_page if last_page else None]
         all_lines: list[Line] = []
         for page in pages:
+            # Character sheets, forms and maps are scattered labels, not prose.
+            if skip_pages and page.page_number in skip_pages:
+                continue
             lines = [ln for ln in page_lines(page, body_size, column_split,
                                              section_ratio)
                      if not is_folio(ln)
@@ -354,7 +424,7 @@ def _is_sigil(token: str) -> bool:
     return sum(1 for c in token if c.isupper()) >= 2
 
 REPLACEMENTS = [
-    (r"[†‡•▪●¶]", " "),        # daggers, bullets
+    (r"[†‡•▪●¶⁘⁙◆◊■□▶‣⸪]", " "),  # daggers, bullets, ornaments
     (r"[—–]", ", "),                                     # em/en dash -> comma pause
     (r"&", " and "),
     # Justified letter-spacing also splits words mid-line ("collec- tion").
@@ -606,6 +676,10 @@ def main() -> int:
                     help="drop any line matching this regex")
     ap.add_argument("--skip-heading", default=None, metavar="REGEX",
                     help="drop headings matching this regex, and their contents")
+    ap.add_argument("--skip-pages", default=None, metavar="SPEC",
+                    help="PDF pages to leave out entirely, e.g. '5,9,12-14' — "
+                         "for character sheets, forms and maps, which are "
+                         "scattered labels rather than prose")
     ap.add_argument("--chunk-chars", type=int, default=3000)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--title", default=None, help="ID3 title (default: file name)")
@@ -625,7 +699,8 @@ def main() -> int:
         min_size_ratio=args.min_size,
         drop_lines=re.compile(args.drop_lines) if args.drop_lines else None,
         skip_heading=re.compile(args.skip_heading) if args.skip_heading else None,
-        section_ratio=args.section_size)
+        section_ratio=args.section_size,
+        skip_pages=parse_page_spec(args.skip_pages))
     sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
