@@ -72,50 +72,78 @@ def classify_font(fontname: str, size: float, body_size: float,
     return BODY
 
 
-def detect_gutter(words, page_width: float, body_size: float = 0.0,
-                  min_width: float = 5.0) -> float | None:
-    """Find the column gutter: the widest empty vertical band near the centre.
+def detect_gutter(words, lo: float, hi: float, body_size: float = 0.0,
+                  min_share: float = 0.06) -> float | None:
+    """Find the column gutter: the x that the fewest words cross.
 
-    Returns the x to split on, or None when the page is a single column. Guessing
-    a fixed midpoint is not safe — a column can overhang it by a few points, and
-    splitting there interleaves the two columns into nonsense.
+    Returns the x to split on, or None when the page is a single column.
+
+    Looking for an *empty vertical band* is the obvious approach and it fails:
+    occupancy is projected over the full page height, so one full-width element
+    — a wide table row, a spanning headline — paints over the gutter and hides
+    it. A real gutter need not be wide either; where a ragged column edge
+    reaches within a point or two of the next column, no band exists at all.
+    What actually defines it is that no line of text crosses it.
     """
-    low, high = page_width * 0.3, page_width * 0.7
-    occupied = [False] * (int(page_width) + 2)
-    # Oversized display letters (drop caps, section dividers) are set across the
-    # gutter and would mask it, so they do not count as occupying it.
+    if len(words) < 20:
+        return None
+    # Oversized display letters are set across the gutter and would mask it.
     if body_size:
         words = [w for w in words if w.get("size", body_size) <= body_size * 1.5]
-    for w in words:
-        for x in range(max(0, int(w["x0"])), min(len(occupied) - 1, int(w["x1"]) + 1)):
-            occupied[x] = True
+        if len(words) < 20:
+            return None
 
-    best = run_start = None
-    run = 0
-    for x in range(int(low), int(high)):
-        if not occupied[x]:
-            if run == 0:
-                run_start = x
-            run += 1
-            if best is None or run > best[1] - best[0]:
-                best = (run_start, x + 1)
-        else:
-            run = 0
+    span = hi - lo
+    best: tuple[int, int, float] | None = None  # (crossings, -balance, x)
+    for x in range(int(lo + span * 0.3), int(lo + span * 0.7)):
+        crossings = sum(1 for w in words if w["x0"] < x < w["x1"])
+        left = sum(1 for w in words if w["x1"] <= x)
+        right = sum(1 for w in words if w["x0"] >= x)
+        candidate = (crossings, -min(left, right), float(x))
+        if best is None or candidate < best:
+            best = candidate
 
-    # A sparse page can have an empty middle by accident; a real gutter needs
-    # enough text on the page for the band to mean something.
-    if best is None or best[1] - best[0] < min_width or len(words) < 20:
-        return None
+    crossings, neg_balance, split = best
+    balance = -neg_balance
+    # Crossings are the load-bearing test. A single column of prose has many
+    # words straddling any interior x, so finding an x that none cross is
+    # already near-proof of a gutter; the balance check then only has to rule
+    # out a stray marginal word, and can stay loose enough to catch a narrow
+    # sidebar. If nothing is perfectly clean, a spanning table row can be
+    # tolerated, but then insist on a properly balanced split.
+    if crossings == 0:
+        return split if balance >= max(4, 0.03 * len(words)) else None
+    if crossings <= 0.01 * len(words) and balance >= max(4, min_share * len(words)):
+        return split
+    return None
 
-    split = (best[0] + best[1]) / 2
-    left = sum(1 for w in words if w["x1"] <= split)
-    right = sum(1 for w in words if w["x0"] >= split)
-    # Both sides must carry real text. The right column may be small — a pull
-    # quote beside a full column still needs splitting — so only require a few
-    # words, not a share of the page.
-    if left < 3 or right < 3:
-        return None
-    return split
+
+def column_splits(words, lo: float, hi: float, body_size: float,
+                  depth: int = 3) -> list[float]:
+    """Find every gutter on the page, splitting each column again in turn.
+
+    A page can carry three or more columns — a pair of text columns beside a
+    narrow sidebar — and one split leaves two of them still interleaved.
+    """
+    if depth <= 0 or len(words) < 20:
+        return []
+    split = detect_gutter(words, lo, hi, body_size)
+    if split is None:
+        return []
+    left = [w for w in words if w["x0"] < split]
+    right = [w for w in words if w["x0"] >= split]
+    return (column_splits(left, lo, split, body_size, depth - 1)
+            + [split]
+            + column_splits(right, split, hi, body_size, depth - 1))
+
+
+def column_of(x: float, splits: list[float]) -> int:
+    """Which column an x coordinate falls in, given the gutter positions."""
+    index = 0
+    for split in splits:
+        if x >= split:
+            index += 1
+    return index
 
 
 def merge_split_words(line: list, max_gap: float = 1.0) -> list:
@@ -185,49 +213,46 @@ def page_lines(page, body_size: float, column_split: float | None,
 
     tolerance = max(2.0, body_size * 0.4)
     # Full-width pages (title pages, opening prose) must not be split.
-    split = (column_split if column_split is not None
-             else detect_gutter(words, page.width, body_size))
-    if split is None:
+    splits = ([column_split] if column_split is not None
+              else column_splits(words, 0.0, page.width, body_size))
+    if not splits:
         return [ln for group in group_into_lines(words, tolerance)
                 if (ln := make_line(group, body_size, section_ratio))]
 
-    # A headline set across both columns is not part of either. Treat it as a
-    # horizontal divider: everything below it, in both columns, follows it.
-    # Without this a spanning title is torn in half, the words left of the
-    # gutter read at one point and the rest at the top of the second column.
+    # A headline set across the columns is not part of any of them. Treat it as
+    # a horizontal divider: everything below it, in every column, follows it.
+    # Without this a spanning title is torn apart, the words left of the first
+    # gutter read at one point and the rest at the top of the next column.
     spanning: list[Line] = []
-    banded: list[list] = []
+    banded: list[tuple[int, list]] = []
     for group in group_into_lines(words, tolerance):
-        crosses = min(w["x0"] for w in group) < split <= max(w["x1"] for w in group)
+        first = column_of(min(w["x0"] for w in group), splits)
+        last = column_of(max(w["x1"] for w in group) - 1, splits)
         display = all(w["size"] >= body_size * 1.25 for w in group)
-        if crosses and display:
+        if last > first and display:
             if line := make_line(group, body_size, section_ratio):
                 spanning.append(line)
             continue
-        # A baseline runs across the whole page, so the two columns share it.
-        # Each side has to become its own line or the columns read interleaved.
-        for side in ([w for w in group if w["x0"] < split],
-                     [w for w in group if w["x0"] >= split]):
-            if side:
-                banded.append(side)
+        # A baseline runs across the whole page, so every column shares it.
+        # Each column's share has to become its own line, or they interleave.
+        by_column: dict[int, list] = {}
+        for w in group:
+            by_column.setdefault(column_of(w["x0"], splits), []).append(w)
+        for index, side in sorted(by_column.items()):
+            banded.append((index, side))
 
-    boundaries = [ln.top for ln in spanning]
     lines: list[Line] = []
 
     def emit_band(low: float, high: float):
-        """Read the left column of this band, then the right."""
-        for want_left in (True, False):
-            for group in banded:
-                top = group[0]["top"]
-                if not (low <= top < high):
-                    continue
-                is_left = min(w["x0"] for w in group) < split
-                if is_left != want_left:
+        """Read this band one column at a time, left to right."""
+        for column in range(len(splits) + 1):
+            for index, group in banded:
+                if index != column or not (low <= group[0]["top"] < high):
                     continue
                 if line := make_line(group, body_size, section_ratio):
                     lines.append(line)
 
-    edges = [-float("inf")] + boundaries + [float("inf")]
+    edges = [-float("inf")] + [ln.top for ln in spanning] + [float("inf")]
     for i, low in enumerate(edges[:-1]):
         if i > 0:
             lines.append(spanning[i - 1])
@@ -290,7 +315,7 @@ def build_blocks(lines: list[Line], line_gap: float,
             if (blocks and blocks[-1].section and current is None and not buffer
                     and prev_section_top is not None
                     and 0 < line.top - prev_section_top < line.size * 1.8):
-                blocks[-1].section = join_wrapped([blocks[-1].section, line.text])
+                blocks[-1].section = join_title(blocks[-1].section, line.text)
             else:
                 flush_block()
                 blocks.append(Block(section=line.text.strip()))
@@ -334,6 +359,22 @@ def build_blocks(lines: list[Line], line_gap: float,
 
 
 JOIN = "\x00"  # placeholder for an undecided hyphen
+
+
+TITLE_JOIN = "\x01"  # placeholder for an undecided title line break
+
+
+def join_title(first: str, second: str) -> str:
+    """Join the lines of a display title, which may break mid-word.
+
+    Big type gets broken wherever it fits and without a hyphen — "Grass" over
+    "lands". A lower-case fragment is ambiguous: it can be the tail of a word,
+    or an ordinary function word ("Road" over "and the High"). Mark it and let
+    the book's own vocabulary decide.
+    """
+    if second[:1].islower():
+        return first + TITLE_JOIN + second
+    return first + " " + second
 
 
 def join_wrapped(lines: list[str]) -> str:
@@ -386,7 +427,9 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
                    drop_lines: re.Pattern | None = None,
                    skip_heading: re.Pattern | None = None,
                    section_ratio: float = 1.8,
-                   skip_pages: set[int] | None = None) -> list[Block]:
+                   skip_pages: set[int] | None = None,
+                   margin_top: float = 0.0,
+                   margin_bottom: float = 0.0) -> list[Block]:
     import pdfplumber
 
     with pdfplumber.open(path) as pdf:
@@ -398,10 +441,15 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
             # Character sheets, forms and maps are scattered labels, not prose.
             if skip_pages and page.page_number in skip_pages:
                 continue
+            # Running heads and feet sit in the margins and carry the page
+            # number plus the section name; read aloud they interrupt every page.
+            floor_y = page.height - margin_bottom if margin_bottom else None
             lines = [ln for ln in page_lines(page, body_size, column_split,
                                              section_ratio)
                      if not is_folio(ln)
                      and ln.size >= floor
+                     and ln.top >= margin_top
+                     and (floor_y is None or ln.top <= floor_y)
                      and not (drop_lines and drop_lines.search(ln.text))]
             all_lines.extend(lines)
             # Page break: force a paragraph flush only if the page ends mid-entry
@@ -424,8 +472,9 @@ def _is_sigil(token: str) -> bool:
     return sum(1 for c in token if c.isupper()) >= 2
 
 REPLACEMENTS = [
-    (r"[†‡•▪●¶⁘⁙◆◊■□▶‣⸪]", " "),  # daggers, bullets, ornaments
+    (r"[†‡•▪●¶⁘⁙◆◊■□▶‣⸪»«]", " "),  # daggers, bullets, ornaments
     (r"[—–]", ", "),                                     # em/en dash -> comma pause
+    (r"…", "."),                                         # ellipsis -> a full stop
     (r"&", " and "),
     # Justified letter-spacing also splits words mid-line ("collec- tion").
     # Suspended hyphens ("short- and long-term") are genuine and left alone.
@@ -434,6 +483,9 @@ REPLACEMENTS = [
     (r"([‘“(\[])\s+", r"\1"),
     (r"([.!?])[\s,]*,", r"\1"),                          # ". ," -> "."
     (r",\s*([.!?])", r"\1"),
+    # Collapse any run of stops, however it arose — a typographic ellipsis, the
+    # author's own "..", or dots left by a leader — into a single pause.
+    (r"\.\s*(?:\.\s*)+", ". "),
     (r"\s+", " "),
 ]
 
@@ -444,8 +496,7 @@ def normalise(text: str, keep_citations: bool) -> str:
             lambda m: "" if _is_sigil(m.group(1)) else m.group(0), text)
     for pattern, repl in REPLACEMENTS:
         text = re.sub(pattern, repl, text)
-    text = text.replace("..", ".").strip()
-    return text
+    return text.strip()
 
 
 def terminate(text: str) -> str:
@@ -463,18 +514,36 @@ def resolve_hyphens(sections: list["Section"]) -> None:
     halves stand alone as words elsewhere in the text, the hyphen was a real
     compound; otherwise the word was merely broken across a line.
     """
-    plain = " ".join(s.text for s in sections).replace(JOIN, "")
+    # Split at the markers so the vocabulary is of words the book actually
+    # sets on their own, not of the fragments we are trying to judge.
+    plain = " ".join(s.text for s in sections)
+    plain = plain.replace(JOIN, " ").replace(TITLE_JOIN, " ")
     vocab = {t.lower() for t in re.findall(r"[A-Za-z]{3,}", plain)}
 
     def decide(match: re.Match) -> str:
         left, right = match.group(1), match.group(2)
+        # A number after the hyphen is not the tail of the word: a list marker
+        # or table figure has landed between a word and its continuation.
+        if not right[:1].isalpha():
+            return f"{left} {right}"
         if right[:1].isupper() or (left.lower() in vocab and right.lower() in vocab):
             return f"{left}-{right}"
         return left + right
 
-    pattern = re.compile(rf"(\w+){JOIN}(\w+)")
+    def decide_title(match: re.Match) -> str:
+        left, right = match.group(1), match.group(2)
+        # Only run the halves together when the book uses that word elsewhere,
+        # so "Grass"/"lands" becomes Grasslands while "Road"/"and" stays apart.
+        if (left + right).lower() in vocab:
+            return left + right
+        return f"{left} {right}"
+
+    hyphen = re.compile(rf"(\w+){JOIN}(\w+)")
+    title = re.compile(rf"(\w+){TITLE_JOIN}(\w+)")
     for section in sections:
-        section.text = pattern.sub(decide, section.text)
+        section.text = hyphen.sub(decide, section.text)
+        section.text = title.sub(decide_title, section.text)
+        section.title = title.sub(decide_title, section.title)
 
 
 @dataclass
@@ -498,7 +567,9 @@ def blocks_to_sections(blocks: list[Block], keep_citations: bool,
         if block.section:
             flush()
             parts = []
-            title = block.section
+            # A chapter title needs the same repairs as body copy: it can be
+            # broken across lines mid-word or mid-hyphen by the display setting.
+            title = normalise(block.section, keep_citations=True)
             # "Section A." for alphabet dividers; a prose title reads as itself.
             spoken = (say_section.format(name=title)
                       if say_section and len(title) <= 2 else title)
@@ -595,6 +666,27 @@ async def synth_all(chunks: list[str], workdir: Path, voice: str, rate: str,
     return paths
 
 
+def group_sections(section_ranges: list[tuple[str, int, int]],
+                   durations: list[float], target: float) -> list[list[int]]:
+    """Group consecutive sections into parts of roughly `target` seconds.
+
+    Splitting only on a chapter boundary means no part starts mid-sentence.
+    """
+    groups: list[list[int]] = []
+    current: list[int] = []
+    running = 0.0
+    for index, (_title, lo, hi) in enumerate(section_ranges):
+        span = sum(durations[lo:hi])
+        if current and running + span > target:
+            groups.append(current)
+            current, running = [], 0.0
+        current.append(index)
+        running += span
+    if current:
+        groups.append(current)
+    return groups
+
+
 def duration_of(path: Path) -> float:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -676,6 +768,12 @@ def main() -> int:
                     help="drop any line matching this regex")
     ap.add_argument("--skip-heading", default=None, metavar="REGEX",
                     help="drop headings matching this regex, and their contents")
+    ap.add_argument("--margin-top", type=float, default=0.0, metavar="PT",
+                    help="ignore text within PT of the top of the page, where "
+                         "running heads live")
+    ap.add_argument("--margin-bottom", type=float, default=0.0, metavar="PT",
+                    help="ignore text within PT of the bottom of the page, "
+                         "where running feet live")
     ap.add_argument("--skip-pages", default=None, metavar="SPEC",
                     help="PDF pages to leave out entirely, e.g. '5,9,12-14' — "
                          "for character sheets, forms and maps, which are "
@@ -686,6 +784,10 @@ def main() -> int:
     ap.add_argument("--author", default=None, help="ID3 artist/author")
     ap.add_argument("--text-only", action="store_true",
                     help="write the extracted narration text and stop")
+    ap.add_argument("--part-minutes", type=float, default=None, metavar="MIN",
+                    help="split the output into parts of about MIN minutes, "
+                         "breaking only on chapter boundaries — for a book too "
+                         "long to sit in one file")
     ap.add_argument("--split-sections", action="store_true",
                     help="also write one MP3 per section")
     args = ap.parse_args()
@@ -700,11 +802,13 @@ def main() -> int:
         drop_lines=re.compile(args.drop_lines) if args.drop_lines else None,
         skip_heading=re.compile(args.skip_heading) if args.skip_heading else None,
         section_ratio=args.section_size,
-        skip_pages=parse_page_spec(args.skip_pages))
+        skip_pages=parse_page_spec(args.skip_pages),
+        margin_top=args.margin_top, margin_bottom=args.margin_bottom)
     sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
-        section.text = section.text.replace(JOIN, "")
+        section.text = section.text.replace(JOIN, "").replace(TITLE_JOIN, " ")
+        section.title = section.title.replace(JOIN, "").replace(TITLE_JOIN, " ")
     full_text = "\n\n".join(s.text for s in sections)
     entries = sum(1 for b in blocks if b.heading)
     print(f"  {len(sections)} sections, {entries} entries, {len(full_text):,} characters")
@@ -741,10 +845,38 @@ def main() -> int:
         for title, start, _end in section_ranges:
             chapters.append((title, offsets[start] if start < len(offsets) else elapsed))
 
-        tags = {"title": args.title or out.stem.replace("_", " "),
-                "album": args.title or out.stem.replace("_", " "),
-                "artist": args.author or "",
-                "genre": "Audiobook"}
+        book = args.title or out.stem.replace("_", " ")
+        tags = {"title": book, "album": book,
+                "artist": args.author or "", "genre": "Audiobook"}
+
+        if args.part_minutes:
+            groups = group_sections(section_ranges, durations, args.part_minutes * 60)
+            print(f"Joining {len(parts)} chunks into {len(groups)} parts "
+                  f"({hhmmss(elapsed)} total) ...")
+            written = []
+            for number, group in enumerate(groups, 1):
+                first, last = group[0], group[-1]
+                lo, hi = section_ranges[first][1], section_ranges[last][2]
+                base = offsets[lo]
+                marks = [(section_ranges[i][0], offsets[section_ranges[i][1]] - base)
+                         for i in group]
+                span = sum(durations[lo:hi])
+                name = out.with_name(f"{out.stem}_part{number:02d}.mp3")
+                concat(parts[lo:hi], name, marks,
+                       {**tags, "title": f"{book}, Part {number}",
+                        "track": f"{number}/{len(groups)}"}, total=span)
+                written.append((name, span, marks))
+                print(f"  part {number}: {hhmmss(span)}, "
+                      f"{name.stat().st_size / 1e6:.1f} MB, {len(marks)} chapters")
+            chapter_txt = out.with_name(out.stem + "_chapters.txt")
+            chapter_txt.write_text("".join(
+                f"== {name.name}  ({hhmmss(span)})\n"
+                + "".join(f"   {hhmmss(t)}  {title}\n" for title, t in marks)
+                for name, span, marks in written))
+            print(f"Done: {len(written)} parts, {hhmmss(elapsed)} total")
+            print(f"      chapter list -> {chapter_txt}")
+            return 0
+
         print(f"Joining {len(parts)} parts ({hhmmss(elapsed)}) ...")
         concat(parts, out, chapters, tags, total=elapsed)
 
