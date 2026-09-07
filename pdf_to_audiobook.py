@@ -146,6 +146,60 @@ def column_of(x: float, splits: list[float]) -> int:
     return index
 
 
+def detect_word_spacing(pdf, sample_pages: int = 12,
+                        default: float = 3.0) -> float:
+    """Find the gap width that separates words, from the document's own spacing.
+
+    Some PDFs contain no space characters at all: words are separated purely by
+    position. The extractor then has to guess, and its default guess is too
+    wide for tightly justified text — whole lines fuse into a single token.
+
+    Letter spacing inside a word and the space between words are two distinct
+    populations, so the histogram of horizontal gaps is bimodal with an empty
+    band between. Split there.
+    """
+    gaps: dict[float, int] = {}
+    spaces = total = 0
+    for page in pdf.pages[:sample_pages]:
+        previous = None
+        for char in sorted(page.chars, key=lambda c: (round(c["top"] / 3), c["x0"])):
+            total += 1
+            if char["text"].isspace():
+                spaces += 1
+            if previous and abs(char["top"] - previous["top"]) < 3:
+                gap = round(char["x0"] - previous["x1"], 1)
+                if gap >= 0:
+                    gaps[gap] = gaps.get(gap, 0) + 1
+            previous = char
+    if not gaps:
+        return default
+    # Only measure when the document leaves the extractor no choice. Where real
+    # space characters are present they already separate the words, the gap
+    # histogram has no second population to find, and whatever the scan returns
+    # is noise fitted to an empty range.
+    if total and spaces / total > 0.01:
+        return default
+
+    step, low, high = 0.1, 0.5, 4.0
+    best = run_start = None
+    run = 0
+    x = low
+    while x <= high:
+        if gaps.get(round(x, 1), 0) == 0:
+            if run == 0:
+                run_start = x
+            run += 1
+            if best is None or run > best[1]:
+                best = (run_start, run)
+        else:
+            run = 0
+        x = round(x + step, 1)
+
+    if best is None or best[1] * step < 0.4:
+        return default
+    return round(best[0] + best[1] * step / 2, 2)
+
+
 def merge_split_words(line: list, max_gap: float = 1.0) -> list:
     """Rejoin words the extractor split where the font changed mid-word.
 
@@ -199,7 +253,8 @@ def make_line(group: list, body_size: float, section_ratio: float) -> Line | Non
 
 
 def page_lines(page, body_size: float, column_split: float | None,
-               section_ratio: float = 1.8) -> list[Line]:
+               section_ratio: float = 1.8,
+               x_tolerance: float = 3.0) -> list[Line]:
     """Extract a page's lines in reading order, column by column.
 
     Rotated text is dropped: in a designed book it is decoration — a title set
@@ -207,7 +262,8 @@ def page_lines(page, body_size: float, column_split: float | None,
     into the prose as rubble.
     """
     page = page.filter(lambda obj: obj.get("upright", True))
-    words = page.extract_words(extra_attrs=["fontname", "size"], keep_blank_chars=False)
+    words = page.extract_words(extra_attrs=["fontname", "size"],
+                               keep_blank_chars=False, x_tolerance=x_tolerance)
     if not words:
         return []
 
@@ -261,9 +317,20 @@ def page_lines(page, body_size: float, column_split: float | None,
     return lines
 
 
-def dominant_body_size(pdf, sample_pages: int = 20) -> float:
+def dominant_body_size(pdf, sample_pages: int = 40) -> float:
+    """The size most of the book's text is set in.
+
+    Sampled evenly across the whole document, not from the front: a book can
+    change body size partway through, and front matter is often set larger, so
+    reading only the opening pages misjudges the size everything else is
+    measured against.
+    """
+    pages = pdf.pages
+    if len(pages) > sample_pages:
+        stride = len(pages) / sample_pages
+        pages = [pages[int(i * stride)] for i in range(sample_pages)]
     counts: dict[float, int] = {}
-    for page in pdf.pages[:sample_pages]:
+    for page in pages:
         for ch in page.chars:
             key = round(ch["size"], 1)
             counts[key] = counts.get(key, 0) + 1
@@ -456,11 +523,14 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
                    section_ratio: float = 1.8,
                    skip_pages: set[int] | None = None,
                    margin_top: float = 0.0,
-                   margin_bottom: float = 0.0) -> list[Block]:
+                   margin_bottom: float = 0.0,
+                   x_tolerance: float | None = None) -> list[Block]:
     import pdfplumber
 
     with pdfplumber.open(path) as pdf:
         body_size = dominant_body_size(pdf)
+        spacing = (x_tolerance if x_tolerance is not None
+                   else detect_word_spacing(pdf))
         floor = body_size * min_size_ratio
         pages = pdf.pages[first_page - 1: last_page if last_page else None]
         all_lines: list[Line] = []
@@ -472,7 +542,7 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
             # number plus the section name; read aloud they interrupt every page.
             floor_y = page.height - margin_bottom if margin_bottom else None
             lines = [ln for ln in page_lines(page, body_size, column_split,
-                                             section_ratio)
+                                             section_ratio, spacing)
                      if not is_folio(ln)
                      and ln.size >= floor
                      and ln.top >= margin_top
@@ -796,6 +866,10 @@ def main() -> int:
                     help="drop any line matching this regex")
     ap.add_argument("--skip-heading", default=None, metavar="REGEX",
                     help="drop headings matching this regex, and their contents")
+    ap.add_argument("--x-tolerance", type=float, default=None, metavar="PT",
+                    help="gap width that separates words; by default this is "
+                         "measured from the document, which matters for PDFs "
+                         "that encode no spaces at all")
     ap.add_argument("--margin-top", type=float, default=0.0, metavar="PT",
                     help="ignore text within PT of the top of the page, where "
                          "running heads live")
@@ -831,7 +905,8 @@ def main() -> int:
         skip_heading=re.compile(args.skip_heading) if args.skip_heading else None,
         section_ratio=args.section_size,
         skip_pages=parse_page_spec(args.skip_pages),
-        margin_top=args.margin_top, margin_bottom=args.margin_bottom)
+        margin_top=args.margin_top, margin_bottom=args.margin_bottom,
+        x_tolerance=args.x_tolerance)
     sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
