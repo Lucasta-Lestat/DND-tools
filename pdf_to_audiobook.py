@@ -278,6 +278,33 @@ def is_folio(line: Line) -> bool:
     return bool(FOLIO_RE.fullmatch(line.text.strip()))
 
 
+def merge_drop_caps(lines: list[Line]) -> list[Line]:
+    """Fold a decorative initial back into the word it begins.
+
+    A drop cap is set many times body size, so it classifies as a chapter
+    opener — which would both invent a chapter named "F" and leave the
+    paragraph starting "or the last three years". The giveaway is that the
+    text after it continues in lower case; a genuine one-letter section
+    divider is followed by a capital.
+    """
+    merged: list[Line] = []
+    skip_next_join = False
+    for index, line in enumerate(lines):
+        if skip_next_join:
+            skip_next_join = False
+            continue
+        is_initial = line.role == SECTION and len(line.text.strip()) == 1 \
+            and line.text.strip().isalpha()
+        following = lines[index + 1] if index + 1 < len(lines) else None
+        if is_initial and following and following.text[:1].islower():
+            merged.append(Line(line.text.strip() + following.text, following.role,
+                               line.top, line.x0, following.size))
+            skip_next_join = True
+            continue
+        merged.append(line)
+    return merged
+
+
 def build_blocks(lines: list[Line], line_gap: float,
                  skip_heading: re.Pattern | None = None) -> list[Block]:
     """Fold classified lines into entries, joining wrapped lines into paragraphs."""
@@ -455,6 +482,7 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
             # Page break: force a paragraph flush only if the page ends mid-entry
             # is *not* wanted, so we deliberately do nothing here — entries wrap
             # across pages and columns in this layout.
+        all_lines = merge_drop_caps(all_lines)
         leading = estimate_leading(all_lines)
         return build_blocks(all_lines, leading, skip_heading)
 
