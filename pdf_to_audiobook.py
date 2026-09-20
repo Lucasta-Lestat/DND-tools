@@ -773,16 +773,24 @@ async def synth_all(chunks: list[str], workdir: Path, voice: str, rate: str,
     sem = asyncio.Semaphore(concurrency)
     paths = [workdir / f"part_{i:05d}.mp3" for i in range(len(chunks))]
     done = 0
+    skipped = []
 
     async def worker(i: int):
         nonlocal done
         async with sem:
-            await synth_chunk(i, chunks[i], paths[i], voice, rate, pitch, proxy)
+            try:
+                await synth_chunk(i, chunks[i], paths[i], voice, rate, pitch, proxy)
+            except RuntimeError as exc:
+                # Skip problematic chunks and continue
+                skipped.append((i, str(exc)))
+                print(f"  chunk {i} skipped ({exc})", end=" ")
             done += 1
             print(f"  spoken {done}/{len(chunks)} chunks", end="\r", flush=True)
 
     await asyncio.gather(*(worker(i) for i in range(len(chunks))))
     print()
+    if skipped:
+        print(f"Warning: skipped {len(skipped)} chunks due to TTS errors")
     return paths
 
 
