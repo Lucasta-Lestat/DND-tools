@@ -345,6 +345,21 @@ def is_folio(line: Line) -> bool:
     return bool(FOLIO_RE.fullmatch(line.text.strip()))
 
 
+def clean_artifacts(text: str) -> str:
+    """Remove OCR artifacts and formatting characters from scrapbook-style PDFs.
+
+    Tildes, random special chars, and mixed decorative text are common in PDFs
+    with handwritten notes, marginalia, and overlapping design elements.
+    """
+    # Remove sequences of tildes (OCR artifacts from overlapping text)
+    text = re.sub(r'~+', '', text)
+    # Remove common OCR garbage patterns
+    text = re.sub(r'[·˜¡¿¬±§¶†‡•‰′″‴℃℉№™℠℮∞∝√∛∜∫∬∭', '', text)
+    # Clean up garbled characters from marginalia/handwriting
+    text = re.sub(r'[()\\|/\[\]{}]+(?:\s|$)', ' ', text)
+    return text.strip()
+
+
 def merge_drop_caps(lines: list[Line]) -> list[Line]:
     """Fold a decorative initial back into the word it begins.
 
@@ -399,6 +414,11 @@ def build_blocks(lines: list[Line], line_gap: float,
         if line.role == DROP:
             continue
 
+        # Clean OCR artifacts from scrapbook-style PDFs
+        clean_text = clean_artifacts(line.text)
+        if not clean_text:
+            continue
+
         # A skipped heading takes its whole section with it, up to the next one.
         if skipping and line.role not in (HEADING, SECTION):
             continue
@@ -409,17 +429,17 @@ def build_blocks(lines: list[Line], line_gap: float,
             if (blocks and blocks[-1].section and current is None and not buffer
                     and prev_section_top is not None
                     and 0 < line.top - prev_section_top < line.size * 1.8):
-                blocks[-1].section = join_title(blocks[-1].section, line.text)
+                blocks[-1].section = join_title(blocks[-1].section, clean_text)
             else:
                 flush_block()
-                blocks.append(Block(section=line.text.strip()))
+                blocks.append(Block(section=clean_text.strip()))
             prev_section_top = line.top
             prev_bottom = None
             continue
         prev_section_top = None
 
         if line.role == HEADING:
-            if skip_heading and skip_heading.search(line.text):
+            if skip_heading and skip_heading.search(clean_text):
                 flush_block()
                 skipping = True
                 continue
@@ -427,10 +447,10 @@ def build_blocks(lines: list[Line], line_gap: float,
             # A headword that wraps onto a second line is still one headword.
             if current is not None and current.heading and not (
                     current.subtitle or current.paragraphs or buffer):
-                current.heading = join_wrapped([current.heading, line.text])
+                current.heading = join_wrapped([current.heading, clean_text])
             else:
                 flush_block()
-                current = Block(heading=line.text.strip())
+                current = Block(heading=clean_text.strip())
             prev_bottom = line.top
             continue
 
@@ -438,14 +458,14 @@ def build_blocks(lines: list[Line], line_gap: float,
             current = Block()
 
         if line.role == SUBTITLE and not current.paragraphs and not buffer:
-            current.subtitle = line.text.strip()
+            current.subtitle = clean_text.strip()
             prev_bottom = line.top
             continue
 
         # A vertical gap larger than normal leading means a new paragraph.
         if prev_bottom is not None and line.top - prev_bottom > line_gap * 1.4:
             flush_paragraph()
-        buffer.append(line.text)
+        buffer.append(clean_text)
         prev_bottom = line.top
 
     flush_block()
