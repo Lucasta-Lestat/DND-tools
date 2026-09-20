@@ -750,7 +750,7 @@ def configure_tls():
 
 
 async def synth_chunk(index: int, text: str, out: Path, voice: str, rate: str,
-                      pitch: str, proxy: str | None, attempts: int = 4):
+                      pitch: str, proxy: str | None, attempts: int = 6):
     import edge_tts
 
     for attempt in range(attempts):
@@ -763,7 +763,8 @@ async def synth_chunk(index: int, text: str, out: Path, voice: str, rate: str,
         except Exception as exc:  # noqa: BLE001 - retry any transport hiccup
             if attempt == attempts - 1:
                 raise RuntimeError(f"chunk {index} failed: {exc}") from exc
-            await asyncio.sleep(2 ** attempt)
+            # Exponential backoff with longer waits for robustness
+            await asyncio.sleep(3 ** attempt)
 
 
 async def synth_all(chunks: list[str], workdir: Path, voice: str, rate: str,
