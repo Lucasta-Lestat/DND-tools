@@ -1,0 +1,30 @@
+# Source PDFs and extracted text (for local processing)
+*.pdf
+*.txt
+
+# Generated audio output
+*.mp3
+*.m4b
+*.wav
+
+# Chapter lists and metadata
+*_chapters.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
