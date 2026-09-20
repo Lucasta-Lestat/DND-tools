@@ -19,6 +19,9 @@ __pycache__/
 build/
 dist/
 
+# Logs
+*.log
+
 # IDE
 .vscode/
 .idea/
