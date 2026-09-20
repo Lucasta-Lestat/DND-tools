@@ -351,14 +351,13 @@ def clean_artifacts(text: str) -> str:
     Tildes, random special chars, and mixed decorative text are common in PDFs
     with handwritten notes, marginalia, and overlapping design elements.
     """
-    # Remove sequences of artifact characters (2+ special chars in a row)
-    text = re.sub(r'[~*:+/;`^_\-]{2,}', '', text)
-    # Remove individual tildes and rare special chars
+    # Remove sequences of 2+ of the same artifact char (e.g., ~~~~, ****, ::)
+    text = re.sub(r'(~)\1{1,}', '', text)
+    text = re.sub(r'([*:+/;`^_\-])\1{1,}', '', text)
+    # Remove individual tildes and rare Unicode decoration chars
     text = re.sub(r'[~·˜¡¿¬§¶†‡•‰′″‴℃℉№™℠℮∞∝√∛∜∫∬∭]', '', text)
-    # Remove leading/trailing artifact chars on lines
-    text = re.sub(r'^[*:+/`~\-\s]+|[*:+/`~\-\s]+$', '', text)
-    # Clean up leftover mixed character patterns
-    text = re.sub(r'[*:+/;`^_\-~]+', '', text)
+    # Remove leading/trailing artifact sequences on lines only
+    text = re.sub(r'^[\s~*:+/`_\-]+|[\s~*:+/`_\-]+$', '', text)
     return text.strip()
 
 
