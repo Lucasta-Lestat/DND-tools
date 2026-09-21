@@ -350,7 +350,10 @@ def clean_artifacts(text: str) -> str:
 
     Tildes, random special chars, and mixed decorative text are common in PDFs
     with handwritten notes, marginalia, and overlapping design elements.
+    PDF encoding issues produce (cid:X) character references that TTS can't handle.
     """
+    # Remove PDF character ID references from failed glyph mapping: (cid:123)
+    text = re.sub(r'\(cid:\d+\)', '', text)
     # Remove sequences of 2+ of the same artifact char (e.g., ~~~~, ****, ::)
     text = re.sub(r'(~)\1{1,}', '', text)
     text = re.sub(r'([*:+/;`^_\-])\1{1,}', '', text)
