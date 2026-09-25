@@ -749,6 +749,100 @@ def book_vocabulary(words: list[dict], min_count: int = 3) -> set[str]:
     return {t for t, n in counts.items() if n >= min_count}
 
 
+TOKEN_RE = re.compile(r"^([^A-Za-z]*)([A-Za-z]+(?:['’][A-Za-z]+)?)([^A-Za-z]*)$")
+SUFFIXES = ("less", "like", "ness", "ful", "ish", "ly", "ed", "ing", "es", "s")
+
+
+def spell_corrector(vocab: set[str]):
+    """A word fixer for OCR slips like "tne", "wilh" and "lke", or None.
+
+    Only a word the dictionary does not know and the book does not repeat is
+    touched, and only when a common word lies one keystroke away (two for a
+    long word). Names and coinages the book uses more than a couple of times
+    are its own vocabulary and are left alone.
+    """
+    try:
+        from importlib.resources import files
+        from symspellpy import SymSpell, Verbosity
+    except ImportError:
+        return None
+    sym = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+    sym.load_dictionary(str(files("symspellpy") / "frequency_dictionary_en_82_765.txt"),
+                        term_index=0, count_index=1)
+    # The frequency list is short on rarer words ("lipless", "brigandine"),
+    # which it would otherwise "fix" into commoner ones. Any system word list
+    # present widens what counts as already correct.
+    known = set(vocab)
+    for wordlist in Path("/usr/share/dict").glob("*-english"):
+        with wordlist.open(encoding="utf-8", errors="ignore") as fh:
+            known.update(line.strip().lower() for line in fh)
+    cache: dict[str, str | None] = {}
+
+    def is_known(low: str) -> bool:
+        if low in known or low in sym.words:
+            return True
+        # "lipless", "hairlike", "futureless": a word list never holds every
+        # compound, but a known stem under a common suffix is a word.
+        for suffix in SUFFIXES:
+            if low.endswith(suffix) and len(low) - len(suffix) >= 3:
+                stem = low[: -len(suffix)]
+                if stem in known or stem + "e" in known:
+                    return True
+        return False
+
+    def fix(token: str, sentence_start: bool) -> str:
+        match = TOKEN_RE.match(token)
+        if not match:
+            return token
+        before, word, after = match.groups()
+        low = word.lower()
+        if len(low) < 5 or "'" in low or "’" in low or word.isupper():
+            return token
+        # A capital mid-sentence is a name, and names are not misspellings.
+        if word[0].isupper() and not sentence_start:
+            return token
+        if is_known(low):
+            return token
+        if low not in cache:
+            distance = 1 if len(low) < 7 else 2
+            found = sym.lookup(low, Verbosity.TOP, max_edit_distance=distance)
+            # Only a common word is worth swapping in: an obscure one is as
+            # likely to be a second misreading as a repair.
+            cache[low] = (found[0].term
+                          if found and found[0].count >= 200_000 else None)
+        fixed = cache[low]
+        if not fixed:
+            return token
+        if word[0].isupper():
+            fixed = fixed[0].upper() + fixed[1:]
+        return before + fixed + after
+
+    return fix
+
+
+def correct_blocks(blocks: list[Block], vocab: set[str]) -> int:
+    fix = spell_corrector(vocab)
+    if fix is None:
+        return 0
+    changed = 0
+
+    def correct(text: str) -> str:
+        nonlocal changed
+        out = []
+        sentence_start = True
+        for token in text.split(" "):
+            fixed = fix(token, sentence_start)
+            changed += fixed != token
+            out.append(fixed)
+            if token:
+                sentence_start = token[-1] in ".!?"
+        return " ".join(out)
+
+    for block in blocks:
+        block.paragraphs = [correct(p) for p in block.paragraphs]
+    return changed
+
+
 def is_ocr_noise(line: Line, vocab: set[str]) -> bool:
     """A line that is mostly not words is artwork read as text.
 
@@ -772,7 +866,8 @@ def extract_blocks_ocr(path: Path, cache: Path, dpi: int, jobs: int,
                        section_ratio: float = 2.0,
                        skip_pages: set[int] | None = None,
                        margin_top: float = 0.0,
-                       margin_bottom: float = 0.0) -> list[Block]:
+                       margin_bottom: float = 0.0,
+                       spell: bool = True) -> list[Block]:
     from PIL import Image
 
     cache.mkdir(parents=True, exist_ok=True)
@@ -810,7 +905,12 @@ def extract_blocks_ocr(path: Path, cache: Path, dpi: int, jobs: int,
                  and not (drop_lines and drop_lines.search(ln.text))]
         all_lines.extend(lines)
     leading = estimate_leading(all_lines)
-    return build_blocks(all_lines, leading, skip_heading)
+    blocks = build_blocks(all_lines, leading, skip_heading)
+    if spell:
+        fixed = correct_blocks(blocks, vocab)
+        print(f"  spelling: corrected {fixed:,} words"
+              if fixed else "  spelling: symspellpy not installed, no correction")
+    return blocks
 
 
 # --------------------------------------------------------------------------
