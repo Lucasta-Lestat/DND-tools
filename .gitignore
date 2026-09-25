@@ -10,6 +10,9 @@
 # Chapter lists and metadata
 *_chapters.txt
 
+# Rendered pages and tesseract output from --ocr runs
+*_ocr/
+
 # Python cache
 __pycache__/
 *.pyc

@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import os
 import re
 import ssl
+import statistics
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -264,13 +267,19 @@ def page_lines(page, body_size: float, column_split: float | None,
     page = page.filter(lambda obj: obj.get("upright", True))
     words = page.extract_words(extra_attrs=["fontname", "size"],
                                keep_blank_chars=False, x_tolerance=x_tolerance)
+    return layout_lines(words, page.width, body_size, column_split, section_ratio)
+
+
+def layout_lines(words: list, width: float, body_size: float,
+                 column_split: float | None, section_ratio: float) -> list[Line]:
+    """Order a page's words into classified lines, column by column."""
     if not words:
         return []
 
     tolerance = max(2.0, body_size * 0.4)
     # Full-width pages (title pages, opening prose) must not be split.
     splits = ([column_split] if column_split is not None
-              else column_splits(words, 0.0, page.width, body_size))
+              else column_splits(words, 0.0, width, body_size))
     if not splits:
         return [ln for group in group_into_lines(words, tolerance)
                 if (ln := make_line(group, body_size, section_ratio))]
@@ -579,6 +588,229 @@ def extract_blocks(path: Path, first_page: int, last_page: int | None,
         all_lines = merge_drop_caps(all_lines)
         leading = estimate_leading(all_lines)
         return build_blocks(all_lines, leading, skip_heading)
+
+
+# --------------------------------------------------------------------------
+# OCR extraction, for scanned PDFs whose own text layer is unusable
+# --------------------------------------------------------------------------
+
+ASCENDERS = set("bdfhklt")
+DESCENDERS = set("gjpqy")
+WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def glyph_height_factor(text: str) -> float:
+    """A word box's height relative to the full ascender-to-descender height.
+
+    Tesseract boxes the ink, so "arms" is boxed at x-height and "hanging" at
+    full height though both are set in the same size. Dividing by this factor
+    recovers a size that is comparable across words.
+    """
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.81
+    ascender = any(c in ASCENDERS or c.isupper() for c in letters) \
+        or any(c.isdigit() for c in text)
+    descender = any(c in DESCENDERS for c in letters)
+    if ascender and descender:
+        return 1.0
+    if ascender or descender:
+        return 0.81
+    return 0.62
+
+
+def render_pages(pdf: Path, workdir: Path, dpi: int) -> list[Path]:
+    subprocess.run(["pdftoppm", "-r", str(dpi), "-gray", "-png", str(pdf),
+                    str(workdir / "page")], check=True)
+    return sorted(workdir.glob("page-*.png"))
+
+
+def ocr_page(image: Path) -> Path:
+    """Run tesseract on one page image, returning its word-box table."""
+    tsv = image.with_suffix(".tsv")
+    if tsv.exists():
+        return tsv
+    # One thread per process: the pages are run in parallel instead.
+    env = {**os.environ, "OMP_THREAD_LIMIT": "1"}
+    subprocess.run(["tesseract", str(image), str(image.with_suffix("")),
+                    "--psm", "3", "-l", "eng", "tsv"],
+                   check=True, capture_output=True, env=env)
+    return tsv
+
+
+def is_caps(texts: list[str]) -> bool:
+    """Set in capitals — allowing for the odd letter the OCR read as lower."""
+    letters = "".join(c for t in texts for c in t if c.isalpha())
+    return len(letters) >= 3 and sum(c.isupper() for c in letters) >= 0.8 * len(letters)
+
+
+def ocr_words(tsv: Path, scale: float, min_conf: float) -> list[dict]:
+    """Read tesseract's word boxes as extractor-style words, in PDF points.
+
+    Artwork under the text comes back as low-confidence fragments, so words
+    tesseract doubts are dropped — unless the rest of their line is read with
+    confidence. A smudged word in a clean sentence is text; a doubtful word
+    among other doubtful words is a drawing.
+    """
+    by_line: dict[tuple, list[dict]] = {}
+    with tsv.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh, delimiter="\t", quoting=csv.QUOTE_NONE):
+            if row["level"] != "5":
+                continue
+            text = row["text"].strip()
+            if not text or not any(c.isalnum() for c in text):
+                continue
+            left, top = int(row["left"]), int(row["top"])
+            width, height = int(row["width"]), int(row["height"])
+            key = (row["block_num"], row["par_num"], row["line_num"])
+            by_line.setdefault(key, []).append({
+                "text": text, "conf": float(row["conf"]), "line": key,
+                "x0": left * scale, "x1": (left + width) * scale,
+                "top": top * scale, "bottom": (top + height) * scale,
+                "size": height * scale / glyph_height_factor(text),
+                "fontname": "ocr"})
+    words: list[dict] = []
+    for group in by_line.values():
+        mean_conf = sum(w["conf"] for w in group) / len(group)
+        clean_line = len(group) >= 3 and mean_conf >= min_conf
+        group = [w for w in group
+                 if w["conf"] >= min_conf
+                 or (clean_line and w["conf"] >= min_conf / 4
+                     and is_wordlike(w["text"]))]
+        if not group:
+            continue
+        # A line is set in one size, whatever its individual words are boxed
+        # at; and sharing one top keeps its words on one baseline downstream.
+        size = statistics.median(w["size"] for w in group)
+        top = min(w["top"] for w in group)
+        for w in group:
+            w["size"], w["top"] = size, top
+        words.extend(group)
+    return words
+
+
+def weighted_median_size(words: list[dict], default: float) -> float:
+    sizes = sorted((w["size"], len(w["text"])) for w in words)
+    total = sum(n for _, n in sizes)
+    seen = 0
+    for size, n in sizes:
+        seen += n
+        if seen * 2 >= total:
+            return size
+    return default
+
+
+def assign_roles(words: list[dict], page_body: float, body: float,
+                 section_ratio: float) -> None:
+    """Settle each OCR line's size and face so classify_font reads it right.
+
+    Measured sizes are only trusted for what they are good at: a line set far
+    larger than the page's own body copy, in capitals or a word or two long,
+    is a title. Everything else is body — the scan's pages vary in type size,
+    and a smear can box a word across two lines, so a line merely somewhat
+    larger than the rest means nothing. Capitalised short lines at body size
+    are the sub-headings within an entry.
+    """
+    by_line: dict[tuple, list[dict]] = {}
+    for w in words:
+        by_line.setdefault(w["line"], []).append(w)
+    groups = list(by_line.values())
+    titles = [g for g in groups
+              if g[0]["size"] / page_body >= section_ratio
+              and is_caps([w["text"] for w in g])]
+    for group in groups:
+        texts = [w["text"] for w in group]
+        ratio = group[0]["size"] / page_body
+        caps = is_caps(texts)
+        # "THE ANTS OF NEUTRALITY / or / EQUAL ANTS": the small word between
+        # two lines of a display title is part of it.
+        joins = (len(texts) <= 2 and ratio >= section_ratio and any(
+            abs(t[0]["top"] - group[0]["top"]) < 3 * group[0]["size"]
+            for t in titles))
+        if group in titles or joins:
+            size = ratio * body
+        else:
+            size = body
+        font = "ocr-bold" if caps and len(texts) <= 4 else "ocr"
+        for w in group:
+            w["size"], w["fontname"] = size, font
+
+
+def is_wordlike(token: str) -> bool:
+    return bool(WORD_RE.search(token)) \
+        and sum(c.isalpha() for c in token) / len(token) >= 0.6
+
+
+def book_vocabulary(words: list[dict], min_count: int = 3) -> set[str]:
+    counts: dict[str, int] = {}
+    for w in words:
+        for token in re.findall(r"[a-z]{2,}", w["text"].lower()):
+            counts[token] = counts.get(token, 0) + 1
+    return {t for t, n in counts.items() if n >= min_count}
+
+
+def is_ocr_noise(line: Line, vocab: set[str]) -> bool:
+    """A line that is mostly not words is artwork read as text.
+
+    The book is its own dictionary: a word it uses three times is a word,
+    and a line made mostly of words it never uses again is a drawing.
+    """
+    tokens = line.text.split()
+    real = sum(1 for t in tokens if is_wordlike(t))
+    if real == 0 or real / len(tokens) < 0.6:
+        return True
+    known = sum(1 for t in tokens
+                if all(p in vocab for p in re.findall(r"[a-z]{2,}", t.lower())))
+    return known / len(tokens) < 0.5
+
+
+def extract_blocks_ocr(path: Path, cache: Path, dpi: int, jobs: int,
+                       min_conf: float, first_page: int, last_page: int | None,
+                       column_split: float | None,
+                       drop_lines: re.Pattern | None = None,
+                       skip_heading: re.Pattern | None = None,
+                       section_ratio: float = 2.0,
+                       skip_pages: set[int] | None = None,
+                       margin_top: float = 0.0,
+                       margin_bottom: float = 0.0) -> list[Block]:
+    from PIL import Image
+
+    cache.mkdir(parents=True, exist_ok=True)
+    images = sorted(cache.glob("page-*.png")) or render_pages(path, cache, dpi)
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        tsvs = list(pool.map(ocr_page, images))
+
+    scale = 72.0 / dpi
+    pages: list[tuple[int, float, float, list[dict]]] = []
+    for image, tsv in zip(images, tsvs):
+        number = int(tsv.stem.rsplit("-", 1)[-1])
+        if number < first_page or (last_page and number > last_page):
+            continue
+        if skip_pages and number in skip_pages:
+            continue
+        width, height = Image.open(image).size
+        pages.append((number, width * scale, height * scale,
+                      ocr_words(tsv, scale, min_conf)))
+
+    every_word = [w for _, _, _, ws in pages for w in ws]
+    body_size = weighted_median_size(every_word, 10.0)
+    vocab = book_vocabulary(every_word)
+
+    all_lines: list[Line] = []
+    for _number, width, height, words in pages:
+        assign_roles(words, weighted_median_size(words, body_size), body_size,
+                     section_ratio)
+        floor_y = height - margin_bottom if margin_bottom else None
+        lines = [ln for ln in layout_lines(words, width, body_size,
+                                           column_split, section_ratio)
+                 if not is_folio(ln)
+                 and not is_ocr_noise(ln, vocab)
+                 and ln.top >= margin_top
+                 and (floor_y is None or ln.top <= floor_y)
+                 and not (drop_lines and drop_lines.search(ln.text))]
+        all_lines.extend(lines)
+    leading = estimate_leading(all_lines)
+    return build_blocks(all_lines, leading, skip_heading)
 
 
 # --------------------------------------------------------------------------
@@ -913,6 +1145,17 @@ def main() -> int:
                     help="PDF pages to leave out entirely, e.g. '5,9,12-14' — "
                          "for character sheets, forms and maps, which are "
                          "scattered labels rather than prose")
+    ap.add_argument("--ocr", action="store_true",
+                    help="ignore the PDF's text layer and OCR the page images "
+                         "with tesseract instead — for scans whose embedded "
+                         "text is garbage")
+    ap.add_argument("--ocr-dpi", type=int, default=300)
+    ap.add_argument("--ocr-cache", type=Path, default=None, metavar="DIR",
+                    help="where to keep the rendered pages and OCR results "
+                         "(default: <output stem>_ocr); re-runs reuse them")
+    ap.add_argument("--ocr-jobs", type=int, default=os.cpu_count() or 2)
+    ap.add_argument("--ocr-min-conf", type=float, default=60.0,
+                    help="drop words tesseract is less than this sure of")
     ap.add_argument("--chunk-chars", type=int, default=3000)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--title", default=None, help="ID3 title (default: file name)")
@@ -930,16 +1173,28 @@ def main() -> int:
     out = args.output or args.pdf.with_suffix(".mp3")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Extracting text from {args.pdf.name} ...")
-    blocks = extract_blocks(
-        args.pdf, args.first_page, args.last_page, args.column_split,
-        min_size_ratio=args.min_size,
-        drop_lines=re.compile(args.drop_lines) if args.drop_lines else None,
-        skip_heading=re.compile(args.skip_heading) if args.skip_heading else None,
-        section_ratio=args.section_size,
-        skip_pages=parse_page_spec(args.skip_pages),
-        margin_top=args.margin_top, margin_bottom=args.margin_bottom,
-        x_tolerance=args.x_tolerance)
+    drop_lines = re.compile(args.drop_lines) if args.drop_lines else None
+    skip_heading = re.compile(args.skip_heading) if args.skip_heading else None
+    if args.ocr:
+        cache = args.ocr_cache or out.with_name(out.stem + "_ocr")
+        print(f"OCRing {args.pdf.name} at {args.ocr_dpi} dpi ...")
+        blocks = extract_blocks_ocr(
+            args.pdf, cache, args.ocr_dpi, args.ocr_jobs, args.ocr_min_conf,
+            args.first_page, args.last_page, args.column_split,
+            drop_lines=drop_lines, skip_heading=skip_heading,
+            section_ratio=args.section_size,
+            skip_pages=parse_page_spec(args.skip_pages),
+            margin_top=args.margin_top, margin_bottom=args.margin_bottom)
+    else:
+        print(f"Extracting text from {args.pdf.name} ...")
+        blocks = extract_blocks(
+            args.pdf, args.first_page, args.last_page, args.column_split,
+            min_size_ratio=args.min_size,
+            drop_lines=drop_lines, skip_heading=skip_heading,
+            section_ratio=args.section_size,
+            skip_pages=parse_page_spec(args.skip_pages),
+            margin_top=args.margin_top, margin_bottom=args.margin_bottom,
+            x_tolerance=args.x_tolerance)
     sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
