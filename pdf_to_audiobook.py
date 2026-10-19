@@ -956,7 +956,9 @@ def normalise(text: str, keep_citations: bool) -> str:
 def terminate(text: str) -> str:
     """Give a fragment sentence-final punctuation so the voice pauses after it."""
     text = text.rstrip()
-    if text and text[-1] not in ".!?:;":
+    # Look past closing quotes and brackets: 'he said."' already ends a sentence.
+    core = text.rstrip("\"'”’)]")
+    if core and core[-1] not in ".!?:;":
         text += "."
     return text
 
@@ -1004,6 +1006,109 @@ def resolve_hyphens(sections: list["Section"]) -> None:
 class Section:
     title: str
     text: str
+
+
+# --------------------------------------------------------------------------
+# Project Gutenberg plain text
+# --------------------------------------------------------------------------
+
+GUTENBERG_CHAPTER = re.compile(r"^(CHAPTER|BOOK|PART)\s+([IVXLC]+|\d+)\b[.:]?\s*(.*)$")
+# Back matter that follows the last chapter in a Gutenberg transcription.
+GUTENBERG_BACK = re.compile(r"^(A NOTE ON THE TYPE|Transcriber'?s Note|End of (the )?Project "
+                            r"Gutenberg|THE END\b)", re.IGNORECASE)
+FOOTNOTE = re.compile(r"^\[(\d+|[A-Z])\]\s+")
+
+
+def roman_to_int(numeral: str) -> int:
+    if numeral.isdigit():
+        return int(numeral)
+    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+    total = 0
+    for char, following in zip(numeral, numeral[1:] + " "):
+        value = values[char]
+        total += -value if values.get(following, 0) > value else value
+    return total
+
+
+def gutenberg_paragraph(lines: list[str]) -> str:
+    """Join one blank-line-separated paragraph of a Gutenberg text for speech."""
+    stripped = [ln.strip() for ln in lines if ln.strip()]
+    if not stripped:
+        return ""
+    # Verse is set indented, one line per line of the poem. Each line end is a
+    # pause, so make sure the voice hears one even where the poet set none.
+    if all(ln.startswith(" ") for ln in lines if ln.strip()) and len(stripped) > 1 \
+            and max(len(s) for s in stripped) < 60:
+        return " ".join(s if s[-1] in ".,;:!?'\"’”-" else s + "," for s in stripped)
+    return " ".join(stripped)
+
+
+def gutenberg_sections(path: Path) -> list[Section]:
+    """Read a Project Gutenberg plain-text book into narrated chapters.
+
+    The licence boilerplate, title pages and list of illustrations are left
+    out; the story starts at the first chapter heading and stops at the back
+    matter. Transcriber's markup is undone: [=o] macrons, _italics_,
+    [Illustration] captions and [1] footnote markers. Footnotes are kept and
+    read where they sit, after the paragraph that cites them.
+    """
+    raw = path.read_text(encoding="utf-8-sig")
+    meta = {key: m.group(1).strip() for key in ("Title", "Author")
+            if (m := re.search(rf"^{key}:\s*(.+)$", raw, re.MULTILINE))}
+    if start := re.search(r"^\*\*\* ?START OF.*$", raw, re.MULTILINE):
+        raw = raw[start.end():]
+    if end := re.search(r"^\*\*\* ?END OF", raw, re.MULTILINE):
+        raw = raw[:end.start()]
+    raw = re.sub(r"\[Illustration[^\]]*\]", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"\[=([A-Za-z])\]", r"\1", raw)
+    raw = re.sub(r"(?<=\S)\[\d+\]", "", raw)
+    raw = raw.replace("_", "").replace("--", ", ")
+
+    sections: list[Section] = []
+    if meta.get("Title"):
+        opening = meta["Title"].title() + "."
+        if meta.get("Author"):
+            opening += f" By {meta['Author']}."
+        sections.append(Section("Opening", opening))
+
+    title: str | None = None
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+
+    def flush_paragraph():
+        nonlocal buffer
+        if title is not None and buffer:
+            text = gutenberg_paragraph(buffer)
+            if note := FOOTNOTE.match(text):
+                text = "Note: " + text[note.end():]
+            if text := normalise(text, keep_citations=True):
+                paragraphs.append(terminate(text))
+        buffer = []
+
+    def flush_chapter():
+        if title is not None and paragraphs:
+            sections.append(Section(title, "\n\n".join([terminate(title)] + paragraphs)))
+
+    for line in raw.splitlines():
+        heading = GUTENBERG_CHAPTER.match(line.strip())
+        if heading:
+            flush_paragraph()
+            flush_chapter()
+            kind, number, name = heading.groups()
+            title = f"{kind.title()} {roman_to_int(number)}"
+            if name:
+                title += f": {name.strip().rstrip('.')}"
+            paragraphs = []
+            continue
+        if title is not None and GUTENBERG_BACK.match(line.strip()):
+            break
+        if line.strip():
+            buffer.append(line)
+        else:
+            flush_paragraph()
+    flush_paragraph()
+    flush_chapter()
+    return sections
 
 
 def blocks_to_sections(blocks: list[Block], keep_citations: bool,
@@ -1206,7 +1311,8 @@ def hhmmss(seconds: float) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("pdf", type=Path)
+    ap.add_argument("pdf", type=Path,
+                    help="the book: a PDF, or a Project Gutenberg plain-text .txt")
     ap.add_argument("-o", "--output", type=Path, default=None,
                     help="output MP3 (default: <pdf stem>.mp3)")
     ap.add_argument("--voice", default="en-GB-RyanNeural",
@@ -1275,7 +1381,11 @@ def main() -> int:
 
     drop_lines = re.compile(args.drop_lines) if args.drop_lines else None
     skip_heading = re.compile(args.skip_heading) if args.skip_heading else None
-    if args.ocr:
+    blocks: list[Block] = []
+    if args.pdf.suffix.lower() == ".txt":
+        print(f"Reading {args.pdf.name} as a Project Gutenberg text ...")
+        sections = gutenberg_sections(args.pdf)
+    elif args.ocr:
         cache = args.ocr_cache or out.with_name(out.stem + "_ocr")
         print(f"OCRing {args.pdf.name} at {args.ocr_dpi} dpi ...")
         blocks = extract_blocks_ocr(
@@ -1295,7 +1405,8 @@ def main() -> int:
             skip_pages=parse_page_spec(args.skip_pages),
             margin_top=args.margin_top, margin_bottom=args.margin_bottom,
             x_tolerance=args.x_tolerance)
-    sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
+    if blocks:
+        sections = blocks_to_sections(blocks, args.keep_citations, args.say_section)
     resolve_hyphens(sections)
     for section in sections:  # belt and braces: no placeholder may reach the voice
         section.text = section.text.replace(JOIN, "").replace(TITLE_JOIN, " ")
@@ -1305,6 +1416,8 @@ def main() -> int:
     print(f"  {len(sections)} sections, {entries} entries, {len(full_text):,} characters")
 
     txt_path = out.with_suffix(".txt")
+    if txt_path.resolve() == args.pdf.resolve():  # never overwrite a .txt source
+        txt_path = out.with_name(out.stem + "_narration.txt")
     txt_path.write_text(full_text + "\n")
     print(f"  narration text -> {txt_path}")
     if args.text_only:
